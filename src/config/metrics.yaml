@@ -1,0 +1,38 @@
+# ── 业务口径（注入 analyze / suggest / respond 的 prompt）──
+metrics:
+  动销率:
+    formula: "有订单SKU数 / 总SKU数 × 100%"
+    warning_threshold: 30
+    description: "反映库存周转健康度"
+
+  广告DRR:
+    formula: "广告花费 / 广告带来销售额 × 100%"
+    warning_threshold: 30
+    description: "广告投入产出比"
+
+  转化率:
+    formula: "订单数 / 点击数 × 100%"
+    warning_threshold: 1.5
+    description: "浏览到下单的转化效率"
+
+# ── 异常规则（detect 节点的代码扫描依据）──
+# ⚠️ 当前阈值为占位值，后续基于真实数据调优，改 yaml 不动代码
+anomaly_rules:
+  订单取消率:
+    type: "环比"
+    threshold: 0.3          # 暂定：较前 7 天均值升 30% 触发
+    window_days: 7
+
+  退货率飙升:
+    type: "环比"
+    threshold: 0.5          # 暂定：较前 7 天均值升 50% 触发
+    window_days: 7
+
+  DRR异常:
+    type: "阈值"
+    threshold: 30           # 暂定：DRR > 30% 触发
+
+  库存预警:
+    type: "阈值"
+    days_of_cover_low: 7    # 暂定：可售天数 < 7 触发
+    days_of_cover_high: 90  # 暂定：可售天数 > 90 触发（滞销）
