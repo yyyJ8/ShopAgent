@@ -1,0 +1,16 @@
+# MCP Server
+mcp>=1.0.0
+
+# LangGraph Agent
+langgraph>=0.2.0
+langgraph-checkpoint>=2.0.0
+
+# LLM
+openai>=1.0.0
+
+# Database
+asyncpg>=0.29.0
+
+# Config
+pyyaml>=6.0
+python-dotenv>=1.0.0
