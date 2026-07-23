@@ -6,3 +6,4 @@ __pycache__/
 *.log
 scripts/output/
 data/
+plan/
