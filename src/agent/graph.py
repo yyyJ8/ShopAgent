@@ -86,13 +86,25 @@ async def understand_node(state: AgentState) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 
 async def plan_node(state: AgentState, plan_llm) -> dict:
-    """plan_llm 通过闭包注入（build_graph 时 bind_tools 后传入）。"""
+    """plan_llm 通过闭包注入（build_graph 时 bind_tools 后传入）。
+    补调轮次：missing_sources 非空时追加提示，要求 LLM 补调缺失工具。"""
     log_node_start("plan", state)
+    missing = state.get("missing_sources", [])
+    iteration = state.get("plan_iteration") or 0
+
     system = PLAN_SYSTEM.format(
         intent=state.get("intent", "lookup"),
         entities=state.get("entities", {}),
         today=date.today().isoformat(),
     )
+    if iteration > 0 and missing:
+        system += (
+            f"\n\n⚠️ 数据完整性检查未通过。以下数据源缺失：{missing}。"
+            f"请调用对应的 MCP 工具补全数据（使用与之前相同的日期参数），"
+            f"否则依赖这些数据源的异常规则将被跳过。"
+            f"只补调缺失的工具即可，已获取的数据无需重复调用。"
+        )
+
     messages = [SystemMessage(content=system)]
     for msg in state.get("messages", []):
         if isinstance(msg, (HumanMessage, AIMessage)):
@@ -128,6 +140,9 @@ async def call_tools_node(state: AgentState) -> dict:
     client = await get_client()
     results = await client.call_tools_parallel(calls)
 
+    # 补调场景：合并已有 tool_results，保留前一轮的结果
+    results = {**state.get("tool_results", {}), **results}
+
     tool_messages = []
     for i, tc in enumerate(tool_calls):
         name = tc["name"]
@@ -142,6 +157,71 @@ async def call_tools_node(state: AgentState) -> dict:
 
     output = {"messages": tool_messages, "tool_results": results}
     log_node_end("call_tools", output)
+    return output
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ③½ data_check — 数据完整性校验（纯代码，无 LLM 调用）
+# ═══════════════════════════════════════════════════════════════════
+
+def _get_required_sources(config: dict) -> dict[str, list[str]]:
+    """从 anomaly_rules 提取每个 data_source 被哪些规则依赖。
+    返回 {"get_ad_performance": ["广告DRR过高", "高点击低转化"], ...}
+    """
+    source_to_rules: dict[str, list[str]] = {}
+    for rule_name, rule in config.get("anomaly_rules", {}).items():
+        for src in rule.get("data_source", "").split("+"):
+            src = src.strip()
+            if src:
+                source_to_rules.setdefault(src, []).append(rule_name)
+    return source_to_rules
+
+
+def data_check_node(state: AgentState) -> dict:
+    """检查 tool_results 是否覆盖了 anomaly_rules 所需的全部数据源。
+    非异常意图直接通过，无 LLM 成本。"""
+    log_node_start("data_check", state)
+    logger = logging.getLogger("ozon-agent")
+    intent = state.get("intent", "")
+    tool_results = state.get("tool_results", {})
+    iteration = state.get("plan_iteration") or 0
+    iteration += 1
+
+    # 非异常意图不需要完整性检查
+    if intent not in ("anomaly", "advice"):
+        output = {"plan_iteration": iteration, "missing_sources": [], "skipped_rules": []}
+        log_node_end("data_check", output)
+        return output
+
+    source_to_rules = _get_required_sources(state.get("config", {}))
+    if not source_to_rules:
+        output = {"plan_iteration": iteration, "missing_sources": [], "skipped_rules": []}
+        log_node_end("data_check", output)
+        return output
+
+    missing_sources = []
+    skipped_rules = []
+    for src, rules in source_to_rules.items():
+        found = any(key.startswith(src) for key in tool_results)
+        if not found:
+            missing_sources.append(src)
+            skipped_rules.extend(rules)
+
+    if missing_sources:
+        if iteration >= 2:
+            logger.warning("  data_check: CIRCUIT BREAKER — %d iterations, missing=%s, skipped_rules=%s",
+                           iteration, missing_sources, skipped_rules)
+        else:
+            logger.info("  data_check: missing=%s → re-plan", missing_sources)
+    else:
+        logger.debug("  data_check: all %d sources covered", len(source_to_rules))
+
+    output = {
+        "plan_iteration": iteration,
+        "missing_sources": missing_sources,
+        "skipped_rules": skipped_rules,
+    }
+    log_node_end("data_check", output)
     return output
 
 
@@ -450,6 +530,31 @@ def route_after_analyze(state: AgentState) -> str:
     return "respond"
 
 
+def route_after_data_check(state: AgentState) -> str:
+    """数据完整性检查后路由：
+    - 非 anomaly/advice → 直接 analyze
+    - 数据完整 → analyze
+    - 缺数据 + 未超限 → 回 plan 补调
+    - 缺数据 + 已超限(≥2轮) → 降级进 analyze
+    """
+    intent = state.get("intent", "")
+    if intent not in ("anomaly", "advice"):
+        return "analyze"
+
+    missing = state.get("missing_sources", [])
+    iteration = state.get("plan_iteration") or 0
+
+    if not missing:
+        return "analyze"
+
+    if iteration >= 2:
+        logger = logging.getLogger("ozon-agent")
+        logger.warning("  route_after_data_check: circuit breaker — proceeding to analyze")
+        return "analyze"
+
+    return "plan"
+
+
 # ═══════════════════════════════════════════════════════════════════
 # build_graph — 异步构建（先连 MCP Server 拿工具列表）
 # ═══════════════════════════════════════════════════════════════════
@@ -474,6 +579,7 @@ async def build_graph() -> StateGraph:
     builder.add_node("understand", understand_node)
     builder.add_node("plan", _plan_node)
     builder.add_node("call_tools", call_tools_node)
+    builder.add_node("data_check", data_check_node)
     builder.add_node("analyze", analyze_node)
     builder.add_node("detect", detect_node)
     builder.add_node("suggest", suggest_node)
@@ -489,7 +595,12 @@ async def build_graph() -> StateGraph:
         "respond": "respond",
         "call_tools": "call_tools",
     })
-    builder.add_edge("call_tools", "analyze")
+    # 数据完整性环：call_tools → data_check → analyze | plan
+    builder.add_edge("call_tools", "data_check")
+    builder.add_conditional_edges("data_check", route_after_data_check, {
+        "analyze": "analyze",
+        "plan": "plan",
+    })
     builder.add_conditional_edges("analyze", route_after_analyze, {
         "respond": "respond",
         "detect": "detect",

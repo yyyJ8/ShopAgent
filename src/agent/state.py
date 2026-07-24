@@ -24,3 +24,8 @@ class AgentState(TypedDict, total=False):
     config: dict                # metrics.yaml 加载结果
     final_answer: str           # 给用户的最终回答
     error: str                  # 全局错误标记
+
+    # ── 数据完整性环 ──
+    plan_iteration: int         # plan 轮次（0 起始，≥2 熔断）
+    missing_sources: list[str]  # 上一轮 data_check 发现缺失的数据源名
+    skipped_rules: list[str]    # 因数据源缺失被跳过的规则名
