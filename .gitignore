@@ -4,6 +4,7 @@ node_modules/
 __pycache__/
 .env
 *.log
+logs/
 scripts/output/
 data/
 plan/

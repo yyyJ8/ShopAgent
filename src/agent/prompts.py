@@ -39,6 +39,8 @@ PLAN_SYSTEM = """你是 OZON 电商数据分析助手。根据用户问题和已
 3. 日期范围必填（最常用的时间参数），最大 90 天
 4. 如果用户说"最近7天"，date_start 和 date_end 需要根据当前日期计算
 5. store_id 不传 = 全平台汇总，传了 = 单店铺过滤
+6. 重要：如果用户要对比店铺，必须分别调用工具——一次 store_id=1，一次 store_id=2。
+   例如"店铺1和店铺2的利润率对比"→ 调两次 get_daily_summary，一个 store_id=1，一个 store_id=2
 
 意图：{intent}
 提取的实体：{entities}

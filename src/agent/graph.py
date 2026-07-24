@@ -16,6 +16,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .mcp_client import get_client
+from .logger import log_node_end, log_node_start
 from .prompts import (
     ANALYZE_SYSTEM,
     DETECT_ATTRIBUTION_PROMPT,
@@ -60,6 +61,7 @@ full_llm = ChatOpenAI(
 # ═══════════════════════════════════════════════════════════════════
 
 async def understand_node(state: AgentState) -> dict:
+    log_node_start("understand", state)
     system = UNDERSTAND_SYSTEM.format(user_query=state["user_query"])
     response = await simple_llm.ainvoke([
         SystemMessage(content=system),
@@ -67,12 +69,14 @@ async def understand_node(state: AgentState) -> dict:
     ])
     try:
         result = json.loads(response.content)
-        return {
+        output = {
             "intent": result.get("intent", "lookup"),
             "entities": result.get("entities", {}),
         }
     except json.JSONDecodeError:
-        return {"intent": "chat", "entities": {}, "error": "Intent parsing failed"}
+        output = {"intent": "chat", "entities": {}, "error": "Intent parsing failed"}
+    log_node_end("understand", output)
+    return output
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -81,6 +85,7 @@ async def understand_node(state: AgentState) -> dict:
 
 async def plan_node(state: AgentState, plan_llm) -> dict:
     """plan_llm 通过闭包注入（build_graph 时 bind_tools 后传入）。"""
+    log_node_start("plan", state)
     system = PLAN_SYSTEM.format(
         intent=state.get("intent", "lookup"),
         entities=state.get("entities", {}),
@@ -92,7 +97,9 @@ async def plan_node(state: AgentState, plan_llm) -> dict:
             messages.append(msg)
 
     response = await plan_llm.ainvoke(messages)
-    return {"messages": [response]}
+    output = {"messages": [response]}
+    log_node_end("plan", output)
+    return output
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -100,13 +107,18 @@ async def plan_node(state: AgentState, plan_llm) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 
 async def call_tools_node(state: AgentState) -> dict:
+    log_node_start("call_tools", state)
     messages = state.get("messages", [])
     if not messages:
-        return {"tool_results": {}, "error": "No messages in state"}
+        output = {"tool_results": {}, "error": "No messages in state"}
+        log_node_end("call_tools", output)
+        return output
 
     last_msg = messages[-1]
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
-        return {"tool_results": {}, "error": "No tool calls found in plan response"}
+        output = {"tool_results": {}, "error": "No tool calls found in plan response"}
+        log_node_end("call_tools", output)
+        return output
 
     tool_calls = last_msg.tool_calls
     calls = [{"name": tc["name"], "args": tc["args"]} for tc in tool_calls]
@@ -124,7 +136,9 @@ async def call_tools_node(state: AgentState) -> dict:
             name=name,
         ))
 
-    return {"messages": tool_messages, "tool_results": results}
+    output = {"messages": tool_messages, "tool_results": results}
+    log_node_end("call_tools", output)
+    return output
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -132,6 +146,7 @@ async def call_tools_node(state: AgentState) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 
 async def analyze_node(state: AgentState) -> dict:
+    log_node_start("analyze", state)
     config_metrics = state.get("config", {}).get("metrics", {})
     tool_results = state.get("tool_results", {})
 
@@ -143,7 +158,9 @@ async def analyze_node(state: AgentState) -> dict:
         SystemMessage(content=system),
         HumanMessage(content="请分析以上数据。"),
     ])
-    return {"analysis": response.content}
+    output = {"analysis": response.content}
+    log_node_end("analyze", output)
+    return output
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -169,6 +186,7 @@ RULE_HANDLERS = {
 
 
 async def detect_node(state: AgentState) -> dict:
+    log_node_start("detect", state)
     anomalies = []
     config = state.get("config", {})
     rules = config.get("anomaly_rules", {})
@@ -196,7 +214,9 @@ async def detect_node(state: AgentState) -> dict:
         except json.JSONDecodeError:
             pass
 
-    return {"anomalies": anomalies}
+    output = {"anomalies": anomalies}
+    log_node_end("detect", output)
+    return output
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -204,6 +224,7 @@ async def detect_node(state: AgentState) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 
 async def suggest_node(state: AgentState) -> dict:
+    log_node_start("suggest", state)
     config_metrics = state.get("config", {}).get("metrics", {})
     system = SUGGEST_SYSTEM.format(
         analysis=state.get("analysis", ""),
@@ -221,7 +242,9 @@ async def suggest_node(state: AgentState) -> dict:
         if line and (line[0].isdigit() or line.startswith("- ") or line.startswith("🔴") or line.startswith("🟡") or line.startswith("🟢")):
             suggestions.append(line)
 
-    return {"suggestions": suggestions}
+    output = {"suggestions": suggestions}
+    log_node_end("suggest", output)
+    return output
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -229,6 +252,7 @@ async def suggest_node(state: AgentState) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 
 async def respond_node(state: AgentState) -> dict:
+    log_node_start("respond", state)
     context = {
         "user_query": state.get("user_query", ""),
         "intent": state.get("intent", ""),
@@ -252,7 +276,9 @@ async def respond_node(state: AgentState) -> dict:
         messages.append(HumanMessage(content="请生成最终回答。"))
 
     response = await simple_llm.ainvoke(messages)
-    return {"final_answer": response.content}
+    output = {"final_answer": response.content}
+    log_node_end("respond", output)
+    return output
 
 
 # ═══════════════════════════════════════════════════════════════════
