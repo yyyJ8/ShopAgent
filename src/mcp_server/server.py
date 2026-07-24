@@ -217,7 +217,38 @@ async def get_ad_performance(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# ⑦ get_daily_summary — 日汇总（⚠️ 派生数据）
+# ⑦ get_ad_campaign_stats — 广告计划粒度日统计
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def get_ad_campaign_stats(
+    date_start: str,
+    date_end: str,
+    campaign_ids: list[str] | None = None,
+    store_id: int | None = None,
+    limit: int = 500,
+) -> dict:
+    """获取广告计划粒度的日统计。不传 store_id = 全平台。
+
+    必填：date_start / date_end (YYYY-MM-DD，≤90天)
+
+    可选筛选项：
+    - campaign_ids: 广告计划 ID 列表
+    - store_id: 店铺 ID（不传=全平台）
+    - limit: 默认 500
+
+    返回 campaign 级别的 impressions/clicks/spend/orders_count/orders_sum。
+    与 get_ad_performance 的区别：此工具是计划粒度，无 SKU 粒度数据。
+    可用于："哪个广告计划 ROI 最高？""广告计划整体花费趋势？"
+    """
+    return await _tools.get_ad_campaign_stats(
+        date_start=date_start, date_end=date_end,
+        campaign_ids=campaign_ids, store_id=store_id, limit=limit,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ⑧ get_daily_summary — 日汇总（⚠️ 派生数据）
 # ═══════════════════════════════════════════════════════════════════
 
 @mcp.tool()

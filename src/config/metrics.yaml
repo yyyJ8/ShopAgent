@@ -42,15 +42,16 @@ anomaly_rules:
   SKU退货异常:
     type: "阈值"
     require: "all"
-    data_source: get_returns + get_daily_summary
+    data_source: get_daily_summary
     conditions:
-      - field: return_rate
+      - field: returns_units
+        op: "gte"
+        value: 4
+      - field: ordered_units
         op: "gte"
         value: 20
-      - field: order_count
-        op: "gte"
-        value: 20
-    description: "退货率 ≥20% 且 月订单 ≥20 单"
+    description: "退货 ≥4件 且 月订单 ≥20 单"
+    # NOTE: return_rate 列不存在，用 returns_units 做代理指标
 
   SKU利润率预警:
     type: "阈值"
@@ -85,13 +86,14 @@ anomaly_rules:
       - field: ctr
         op: "gte"
         value: 3
-      - field: cvr
-        op: "lt"
-        value: 2
       - field: spend
         op: "gte"
         value: 300
-    description: "CTR ≥3% 且 CVR <2% → 主图好但转化差"
+      - field: sold_units
+        op: "lte"
+        value: 1
+    description: "CTR ≥3% 且 花费 ≥300₽ 且 成交≤1单 → 主图好但转化差"
+    # NOTE: cvr 列不存在，用 sold_units≤1 作为转化差的代理指标
 
   SKU断货风险:
     type: "阈值"
@@ -106,12 +108,14 @@ anomaly_rules:
   SKU滞销积压:
     type: "阈值"
     require: "all"
-    data_source: get_daily_summary + get_stock_snapshot
+    data_source: get_daily_summary
     conditions:
-      - field: sales_days
+      - field: ordered_units
         op: "eq"
         value: 0
-      - field: present
+      - field: stock_present
         op: "gte"
         value: 20
-    description: "连续7天0销售 且 库存 ≥20"
+    description: "当日0销售 且 库存 ≥20（连续多日需人工判断）"
+    # NOTE: sales_days 列不存在，用 ordered_units=0 做单日代理。
+    #       stock_present 在 sku_daily_summary 表中，无需跨源合并。

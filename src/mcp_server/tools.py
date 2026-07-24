@@ -169,7 +169,27 @@ async def get_ad_performance(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# ⑦ get_daily_summary
+# ⑦ get_ad_campaign_stats
+# ═══════════════════════════════════════════════════════════════════
+
+async def get_ad_campaign_stats(
+    date_start: str,
+    date_end: str,
+    campaign_ids: list[str] | None = None,
+    store_id: int | None = None,
+    limit: int = db.DEFAULT_LIMIT,
+) -> dict:
+    args = dict(date_start=date_start, date_end=date_end, campaign_ids=campaign_ids, store_id=store_id, limit=limit)
+    if isinstance(v := _validate_date_range(date_start, date_end), str): return _format_error("get_ad_campaign_stats", args, v)
+    try:
+        rows = await db.query_ad_campaign_stats(date_start=date_start, date_end=date_end, campaign_ids=campaign_ids, store_id=store_id, limit=limit)
+        return _format_result("get_ad_campaign_stats", args, rows)
+    except Exception as e:
+        return _format_error("get_ad_campaign_stats", args, str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ⑧ get_daily_summary
 # ═══════════════════════════════════════════════════════════════════
 
 async def get_daily_summary(

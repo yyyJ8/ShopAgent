@@ -5,6 +5,7 @@ LangGraph 状态机 — 7 节点 + 4 条件路由。
 短路:  chat → respond;  lookup → respond (skip detect/suggest)
 """
 import json
+import logging
 import os
 from datetime import date
 from pathlib import Path
@@ -170,10 +171,136 @@ async def analyze_node(state: AgentState) -> dict:
 # ⑤ detect — 规则扫描（代码）+ 归因（LLM）
 # ═══════════════════════════════════════════════════════════════════
 
+def _resolve_severity(fields: dict, severity_map: dict, ref_field: str | None) -> str:
+    """从 severity_map 解析严重级别。按定义顺序，首个匹配的级别胜出。
+    例：{"critical": "< 0 → 亏损", "warning": "< 10 → 利润过低"}"""
+    import re
+
+    if not severity_map or not ref_field:
+        return "warning"
+
+    field_val = fields.get(ref_field)
+    if field_val is None:
+        return "warning"
+
+    OP_MAP = {
+        "<":  lambda a, b: a < b,
+        "<=": lambda a, b: a <= b,
+        ">":  lambda a, b: a > b,
+        ">=": lambda a, b: a >= b,
+    }
+
+    for level, desc in severity_map.items():
+        m = re.search(r'([<>]=?)\s*(-?\d+\.?\d*)', desc)
+        if not m:
+            continue
+        op_str, val_str = m.group(1), m.group(2)
+        try:
+            target = float(val_str)
+        except ValueError:
+            continue
+        if OP_MAP.get(op_str, lambda a, b: False)(field_val, target):
+            return level
+
+    return "warning"
+
+
 def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> list:
-    """阈值检测：检查指标是否超过 threshold。
-    框架占位——具体检测逻辑基于实际数据结构适配。"""
-    return []
+    """阈值检测：遍历 conditions，对 tool_results 中对应数据源的每行做字段比对。
+
+    支持多数据源按 sku_id 合并、gte/lte/lt/gt/eq 操作符、
+    require: all 逻辑、severity_map 分级。
+    """
+    # 1. 解析数据源名称  "get_returns + get_daily_summary" → ["get_returns", "get_daily_summary"]
+    data_source_str = rule_config.get("data_source", "")
+    source_names = [s.strip() for s in data_source_str.split("+")]
+
+    # 2. 从 tool_results 收集匹配数据，按 sku_id 合并行
+    merged: dict[int, dict] = {}  # sku_id → {合并字段}
+    for source_name in source_names:
+        for key, result in tool_results.items():
+            if not key.startswith(source_name):
+                continue
+            if result.get("error"):
+                continue
+            for row in result.get("data", []):
+                sku_id = row.get("sku_id") or row.get("sku")  # get_returns 表列名是 sku
+                if sku_id is None:
+                    continue
+                merged.setdefault(sku_id, {}).update(row)
+
+    if not merged:
+        return []
+
+    # 3. 提取规则配置
+    conditions = rule_config.get("conditions", [])
+    require_all = rule_config.get("require", "all") == "all"
+    severity_map = rule_config.get("severity_map", {})
+    ref_field = conditions[0]["field"] if conditions else None
+
+    OPS = {
+        "gte": lambda a, b: a >= b,
+        "lte": lambda a, b: a <= b,
+        "lt":  lambda a, b: a < b,
+        "gt":  lambda a, b: a > b,
+        "eq":  lambda a, b: a == b,
+    }
+
+    # 4. 逐行评估条件
+    anomalies = []
+    missing_count: dict[str, int] = {}  # field → 缺失行数
+    required_fields = {c["field"] for c in conditions}
+    for sku_id, fields in merged.items():
+        hits = []
+        for cond in conditions:
+            field_name = cond["field"]
+            op = cond["op"]
+            target = cond["value"]
+            actual = fields.get(field_name)
+            if actual is None:
+                hits.append(False)
+                continue
+            try:
+                hits.append(OPS.get(op, lambda a, b: False)(actual, target))
+            except (TypeError, ValueError):
+                hits.append(False)
+
+        if require_all and not all(hits):
+            for f in required_fields - set(fields.keys()):
+                missing_count[f] = missing_count.get(f, 0) + 1
+            continue
+
+        severity = _resolve_severity(fields, severity_map, ref_field)
+        anomalies.append({
+            "type": rule_name,
+            "severity": severity,
+            "sku_id": sku_id,
+            "detail": {c["field"]: fields.get(c["field"]) for c in conditions},
+            "description": rule_config.get("description", ""),
+        })
+
+    # 诊断：数据源在 tool_results 中未找到（放在 merged 判空前，确保空数据也能报）
+    _log = logging.getLogger("ozon-agent")
+    found_sources = set()
+    for sn in source_names:
+        for key in tool_results:
+            if key.startswith(sn):
+                found_sources.add(sn)
+                break
+    for sn in source_names:
+        if sn not in found_sources:
+            _log.warning("  detect/%s: data_source %r not found in tool_results (keys=%s)",
+                         rule_name, sn, list(tool_results.keys()))
+
+    if not merged:
+        return []
+
+    # 诊断：字段缺失统计（按缺失行数降序）
+    for f, cnt in sorted(missing_count.items(), key=lambda x: -x[1]):
+        _log.warning("  detect/%s: field %r missing in %d/%d rows",
+                     rule_name, f, cnt, len(merged))
+
+    return anomalies
 
 
 def _check_mom(tool_results: dict, rule_config: dict, rule_name: str) -> list:
@@ -190,18 +317,30 @@ RULE_HANDLERS = {
 
 async def detect_node(state: AgentState) -> dict:
     log_node_start("detect", state)
+    logger = logging.getLogger("ozon-agent")
     anomalies = []
     config = state.get("config", {})
     rules = config.get("anomaly_rules", {})
     tool_results = state.get("tool_results", {})
 
+    logger.debug("  detect: %d rules, tool_results keys=%s",
+                 len(rules), list(tool_results.keys()))
+
     # ── 规则扫描（代码层）──
     for rule_name, rule_config in rules.items():
         rule_type = rule_config.get("type", "")
         handler = RULE_HANDLERS.get(rule_type)
-        if handler:
-            result = handler(tool_results, rule_config, rule_name)
-            anomalies.extend(result)
+        if not handler:
+            logger.warning("  detect/%s: no handler for type=%r, skipped", rule_name, rule_type)
+            continue
+        data_source = rule_config.get("data_source", "?")
+        logger.debug("  detect/%s: type=%s, source=%s", rule_name, rule_type, data_source)
+        result = handler(tool_results, rule_config, rule_name)
+        if result:
+            logger.info("  detect/%s: ⚠ %d anomalies", rule_name, len(result))
+        else:
+            logger.debug("  detect/%s: 0 anomalies (no match)", rule_name)
+        anomalies.extend(result)
 
     # ── LLM 归因 ──
     if anomalies:

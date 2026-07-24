@@ -281,7 +281,40 @@ async def query_ad_performance(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# ⑦ get_daily_summary
+# ⑦ get_ad_campaign_stats
+# ═══════════════════════════════════════════════════════════════════
+
+_AD_CAMPAIGN_STATS_SQL = """
+    SELECT campaign_id, stat_date,
+           impressions, clicks, spend,
+           orders_count, orders_sum,
+           synced_at, store_id
+    FROM ozon.ad_daily_stats
+    WHERE stat_date BETWEEN $1 AND $2
+      AND ($3::varchar[] IS NULL OR campaign_id = ANY($3))
+      AND ($4::int IS NULL OR store_id = $4)
+    ORDER BY stat_date, spend DESC
+    LIMIT $5
+"""
+
+
+async def query_ad_campaign_stats(
+    date_start: str,
+    date_end: str,
+    campaign_ids: list[str] | None = None,
+    store_id: int | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> list[dict]:
+    pool = await get_pool()
+    rows = await pool.fetch(
+        _AD_CAMPAIGN_STATS_SQL,
+        _d(date_start), _d(date_end), campaign_ids, store_id, limit,
+    )
+    return [dict(r) for r in rows]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ⑧ get_daily_summary
 # ═══════════════════════════════════════════════════════════════════
 
 _DAILY_SUMMARY_SQL = """

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
@@ -16,7 +16,7 @@ _logger.setLevel(logging.DEBUG)
 
 # ── 文件 handler（详细日志）──
 _file_handler = logging.FileHandler(
-    LOG_DIR / f"agent_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.log",
+    LOG_DIR / f"agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
     encoding="utf-8",
 )
 _file_handler.setLevel(logging.DEBUG)
