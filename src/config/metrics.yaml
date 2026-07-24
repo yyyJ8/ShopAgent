@@ -1,38 +1,117 @@
-# ── 业务口径（注入 analyze / suggest / respond 的 prompt）──
+# OZON 业务口径配置
+#
+# 改 yaml 即可生效，不需要改代码。
+
+# ── 业务口径 ──
+
 metrics:
+
   动销率:
-    formula: "有订单SKU数 / 总SKU数 × 100%"
-    warning_threshold: 30
-    description: "反映库存周转健康度"
+    formula: "有动销的SKU数 / 总SKU数 × 100%"
+    data_source: get_daily_summary
+
+  净利润率:
+    formula: "净利润 / 营收 × 100%"
+    data_source: get_daily_summary
+
+  退货率:
+    formula: "退货金额 / 销售额 × 100%"
+    data_source: get_daily_summary
 
   广告DRR:
     formula: "广告花费 / 广告带来销售额 × 100%"
-    warning_threshold: 30
-    description: "广告投入产出比"
+    warning_threshold: 5
+    data_source: get_ad_performance
 
-  转化率:
-    formula: "订单数 / 点击数 × 100%"
-    warning_threshold: 1.5
-    description: "浏览到下单的转化效率"
+  广告转化率:
+    formula: "广告订单数 / 广告点击数 × 100%"
+    warning_threshold: 2
+    data_source: get_ad_performance
 
-# ── 异常规则（detect 节点的代码扫描依据）──
-# ⚠️ 当前阈值为占位值，后续基于真实数据调优，改 yaml 不动代码
+  可售天数:
+    formula: "当前库存 / 日均销量"
+    data_source: get_stock_snapshot + get_daily_summary
+
+
+# ── 异常检测规则 ──
+#
+# 多维度复合判定，require: all = 全部条件满足才触发。
+
 anomaly_rules:
-  订单取消率:
-    type: "环比"
-    threshold: 0.3          # 暂定：较前 7 天均值升 30% 触发
-    window_days: 7
 
-  退货率飙升:
-    type: "环比"
-    threshold: 0.5          # 暂定：较前 7 天均值升 50% 触发
-    window_days: 7
-
-  DRR异常:
+  SKU退货异常:
     type: "阈值"
-    threshold: 30           # 暂定：DRR > 30% 触发
+    require: "all"
+    data_source: get_returns + get_daily_summary
+    conditions:
+      - field: return_rate
+        op: "gte"
+        value: 20
+      - field: order_count
+        op: "gte"
+        value: 20
+    description: "退货率 ≥20% 且 月订单 ≥20 单"
 
-  库存预警:
+  SKU利润率预警:
     type: "阈值"
-    days_of_cover_low: 7    # 暂定：可售天数 < 7 触发
-    days_of_cover_high: 90  # 暂定：可售天数 > 90 触发（滞销）
+    require: "all"
+    data_source: get_daily_summary
+    conditions:
+      - field: profit_margin
+        op: "lt"
+        value: 10
+    severity_map:
+      critical: "< 0   → 亏损"
+      warning:  "< 10  → 利润过低"
+
+  广告DRR过高:
+    type: "阈值"
+    require: "all"
+    data_source: get_ad_performance
+    conditions:
+      - field: drr_total
+        op: "gte"
+        value: 5
+      - field: spend
+        op: "gte"
+        value: 500
+    description: "DRR ≥5% 且 花费 ≥500₽"
+
+  高点击低转化:
+    type: "阈值"
+    require: "all"
+    data_source: get_ad_performance
+    conditions:
+      - field: ctr
+        op: "gte"
+        value: 3
+      - field: cvr
+        op: "lt"
+        value: 2
+      - field: spend
+        op: "gte"
+        value: 300
+    description: "CTR ≥3% 且 CVR <2% → 主图好但转化差"
+
+  SKU断货风险:
+    type: "阈值"
+    require: "all"
+    data_source: get_stock_snapshot
+    conditions:
+      - field: present
+        op: "lte"
+        value: 10
+    description: "库存 ≤10 件"
+
+  SKU滞销积压:
+    type: "阈值"
+    require: "all"
+    data_source: get_daily_summary + get_stock_snapshot
+    conditions:
+      - field: sales_days
+        op: "eq"
+        value: 0
+      - field: present
+        op: "gte"
+        value: 20
+    description: "连续7天0销售 且 库存 ≥20"

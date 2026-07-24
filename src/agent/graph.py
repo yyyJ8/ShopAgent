@@ -39,7 +39,8 @@ if _api_key:
     _api_key = _api_key.strip('"').strip("'")
 
 DEEPSEEK_BASE = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-v4-pro"
+# DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 simple_llm = ChatOpenAI(
     model=DEEPSEEK_MODEL,
@@ -127,9 +128,11 @@ async def call_tools_node(state: AgentState) -> dict:
     results = await client.call_tools_parallel(calls)
 
     tool_messages = []
-    for tc in tool_calls:
+    for i, tc in enumerate(tool_calls):
         name = tc["name"]
-        result = results.get(name, {"data": [], "row_count": 0, "error": "Tool not executed"})
+        # 先用序号 key 找，找不到用原名找
+        key = f"{name}#{i}" if len(calls) > 1 else name
+        result = results.get(key, results.get(name, {"data": [], "row_count": 0, "error": "Tool not executed"}))
         tool_messages.append(ToolMessage(
             content=json.dumps(result, ensure_ascii=False, default=str),
             tool_call_id=tc["id"],

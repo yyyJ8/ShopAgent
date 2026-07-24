@@ -79,14 +79,15 @@ class MCPClient:
         """并行执行多个工具调用。单个失败不影响其他。
 
         calls: [{"name": "get_postings", "args": {...}}, ...]
-        返回 {tool_name: {data, row_count, error?}}。
+        返回 key 格式 "{tool_name}"（单次调用）或 "{tool_name}#{index}"（同名多次调用）。
+        例如 plan 调了两次 get_daily_summary，key 会变成 get_daily_summary#0 和 get_daily_summary#1。
         """
-        async def _call_one(call):
+        async def _call_one(idx, call):
             name = call["name"]
             args = call.get("args", {})
-            return name, await self.call_tool(name, args)
+            return idx, name, await self.call_tool(name, args)
 
-        tasks = [_call_one(c) for c in calls]
+        tasks = [_call_one(i, c) for i, c in enumerate(calls)]
         results_list = await asyncio.gather(*tasks, return_exceptions=True)
 
         output = {}
@@ -94,7 +95,14 @@ class MCPClient:
             if isinstance(item, Exception):
                 output["unknown"] = {"data": [], "row_count": 0, "error": str(item)}
             else:
-                output[item[0]] = item[1]
+                idx, name, result = item
+                # 同名多次调用时加序号区分，单次调用保持原名
+                key = f"{name}#{idx}" if len(calls) > 1 else name
+                if key not in output:
+                    output[key] = result
+                else:
+                    # 极端情况：手动去重同名调用（不同 idx 但同名+同 key 冲突）
+                    output[f"{name}#{len(output)}"] = result
         return output
 
 

@@ -60,6 +60,15 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Explicit Authorization Required for Code Changes
+
+**Do not modify code unless explicitly told to. Default to read-only.**
+
+- Default behavior: analyze, suggest, ask — never directly edit files.
+- Only edit code when the user says "你直接修改", "直接改", "帮我改", "你来操作", or equivalent phrases that clearly authorize direct action.
+- In auto/autonomous mode, this rule is especially strict: when in doubt, ask first rather than acting on your own.
+- This rule covers project code and configuration files (`src/`, `config/`, etc.). It does not block editing of markdown docs, plan files, or other non-code content.
+
 ---
 
 ## Project-Specific Guidelines
