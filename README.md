@@ -24,7 +24,7 @@ pip install -r requirements.txt
 # DB_NAME=ai_application
 # DB_USER=your_user
 # DB_PASSWORD=your_password
-# DEEPSEEK_API_KEY=sk-your-key    ← 无引号
+# DEEPSEEK_API_KEY=sk-your-key    
 
 # 3. 启动 MCP Server（streamable-http 模式）
 MCP_TRANSPORT=http python -m src.mcp_server.server
@@ -37,42 +37,43 @@ python -m src.agent.run
 
 ## 架构
 
+### 系统拓扑
+
 ```
-用户自然语言
-    ↓
-┌─────────────────────────────────────────────┐
-│ LangGraph Agent ✅                            │
-│                                               │
-│  START → ① understand → ② plan → ③ call_tools │
-│              ↓                        ↓       │
-│          ⑦ respond  ←  ⑥ suggest  ←  ⑤ detect │
-│              ↑              ↑          ↑      │
-│              └── ④ analyze ─┴──────────┘      │
-│                                               │
-│  路由：chat → respond（短路）                   │
-│        lookup → respond（跳过 detect/suggest）  │
-│        anomaly/advice → 全链路                  │
-│                                               │
-│  MCP Client (streamable-http)                 │
-│    list_tools() → 7 个工具 schema              │
-│    call_tool(name, args) → 执行查询            │
-└──────────────────┬──────────────────────────┘
-                   │ HTTP
-                   ▼
-┌─────────────────────────────────────────────┐
-│ MCP Server: ozon-data ✅                      │
-│  ① get_products              商品主数据       │
-│  ② get_postings              订单/发货        │
-│  ③ get_returns               退货数据         │
-│  ④ get_finance_transactions  财务流水         │
-│  ⑤ get_stock_snapshot         实时库存        │
-│  ⑥ get_ad_performance         广告表现        │
-│  ⑦ get_daily_summary          日汇总 ⚠️       │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-PostgreSQL（固定参数化 SQL，2 店铺 / 81+ 商品）
+用户 → LangGraph Agent → MCP Server (FastMCP) → PostgreSQL
+         streamable-http        asyncpg 连接池
 ```
+
+### Agent 内部流转
+
+下图展示 **anomaly/advice 意图**的完整链路（含数据完整性环）：
+
+```mermaid
+flowchart LR
+    START([用户提问]) --> N1[① understand<br/>意图分类 + 实体提取]
+
+    N1 --> N2[② plan<br/>Function Calling 选工具填参]
+
+    N2 -- "有 tool_calls" --> N3[③ call_tools<br/>并行执行 MCP]
+    N2 -- "无需工具" --> N8
+
+    N3 --> N4{④ data_check<br/>数据源覆盖检查}
+
+    N4 -- "缺失 ≤1次补调" --> N2
+    N4 -- "完整 / 熔断≥2轮" --> N5
+
+    N5[⑤ analyze<br/>数据解读 + 交叉验证] --> N6[⑥ detect<br/>规则扫描 + LLM归因]
+    N6 --> N7[⑦ suggest<br/>运营建议]
+    N7 --> N8[⑧ respond<br/>组装最终回答]
+
+    N8 --> END([返回用户])
+```
+
+**路由捷径：**
+- `chat` 意图：understand → respond（2 节点直达）
+- `lookup` 意图：跳过 data_check / detect / suggest（5 节点）
+
+> 节点职责详见下方 [Agent 节点](#agent-节点8-节点--5-条件路由) 表格，MCP 工具列表见 [MCP 工具](#mcp-工具) 表格。
 
 ---
 
@@ -81,8 +82,8 @@ PostgreSQL（固定参数化 SQL，2 店铺 / 81+ 商品）
 | 层级 | 技术 | 说明 |
 |------|------|------|
 | LLM | DeepSeek V4 Pro | OpenAI 兼容 API，Function Calling |
-| 编排 | LangGraph 1.2+ | StateGraph + 7 节点 + 4 条件路由 + MemorySaver |
-| MCP | FastMCP | 7 个语义化数据工具，stdio/sse/streamable-http 三种传输 |
+| 编排 | LangGraph 1.2+ | StateGraph + 8 节点 + 5 条件路由 + 数据完整性环 + MemorySaver |
+| MCP | FastMCP | 8 个语义化数据工具，stdio/sse/streamable-http 三种传输 |
 | 数据库 | PostgreSQL + asyncpg | 异步连接池，json/jsonb 自动解析 |
 | 配置 | python-dotenv + PyYAML | .env 密钥不进仓库，metrics.yaml 业务口径 |
 | 入口 | CLI / Streamlit | 先命令行交互，后续加 UI |
@@ -95,34 +96,36 @@ PostgreSQL（固定参数化 SQL，2 店铺 / 81+ 商品）
 |------|--------|--------|------|
 | ① get_products | products 原始表 | ⭐⭐⭐ 高 | 商品主数据，按 SKU/状态/类目/店铺筛选 |
 | ② get_postings | postings 原始表 | ⭐⭐⭐ 高 | 订单/发货，含 products jsonb 明细 |
-| ③ get_returns | returns 原始表 | ⭐⭐⭐ 高 | 退货记录 + 退货原因（俄文） |
+| ③ get_returns | returns 原始表 | ⭐⭐⭐ 高 | 退货记录 + 退货原因（俄文），SKU 列名为 `sku` |
 | ④ get_finance_transactions | finance_transactions 原始表 | ⭐⭐⭐ 高 | 操作级财务流水，13 种 operation_type |
 | ⑤ get_stock_snapshot | stocks 原始表 | ⭐⭐⭐ 高 | 实时库存（present/reserved × FBO/FBS） |
-| ⑥ get_ad_performance | ad_sku_daily_stats | ⭐⭐ 中 | SKU × 活动 × 天广告表现 |
-| ⑦ get_daily_summary | sku_daily_summary ETL | ⭐ 低-中 | SKU 日损益汇总，关键结论需交叉验证原始表 |
+| ⑥ get_ad_performance | ad_sku_daily_stats | ⭐⭐ 中 | SKU × 计划 × 天广告表现，含 ctr/drr_total/spend/sold_units |
+| ⑦ get_ad_campaign_stats | ad_daily_stats | ⭐⭐ 中 | 计划级日统计，含 orders_count/orders_sum，无 SKU 粒度 |
+| ⑧ get_daily_summary | sku_daily_summary ETL | ⭐ 低-中 | SKU 日损益汇总，关键结论需交叉验证原始表 |
 
 所有工具支持可选 `store_id`，不传 = 全平台汇总。
 
 ---
 
-## Agent 节点（7 节点 + 4 条件路由）
+## Agent 节点（8 节点 + 5 条件路由）
 
 | 节点 | 谁做 | 模型 | 说明 |
 |------|------|------|------|
 | ① understand | LLM | simple | 意图分类（lookup/anomaly/advice/chat）+ 实体提取 |
-| ② plan | LLM + FC | full + tools | Function Calling 选工具 + 填参数 |
-| ③ call_tools | 代码 | — | MCP streamable-http 并行执行，单工具失败不崩 |
-| ④ analyze | LLM | full | 数据解读 + 交叉验证 + 每日汇总可靠性警告 |
-| ⑤ detect | 代码 + LLM | full | 规则扫描（阈值/环比）+ LLM 归因 |
-| ⑥ suggest | LLM | full | 基于异常 + 数据生成可执行运营建议 |
-| ⑦ respond | LLM | simple | 组装最终回答，面向运营人员 |
+| ② plan | LLM + FC | full + tools | Function Calling 选工具 + 填参数；补调轮会收到缺失数据源提示 |
+| ③ call_tools | 代码 | — | MCP streamable-http 并行执行，单工具失败不崩；补调时合并历史结果 |
+| ④ data_check | 代码 | — | 检查 anomaly_rules 所需数据源覆盖，缺失 → 回 plan，≥2 轮熔断降级 |
+| ⑤ analyze | LLM | full | 数据解读 + 交叉验证 + 每日汇总可靠性警告 |
+| ⑥ detect | 代码 + LLM | full | 规则扫描（6 条阈值规则 × 多数据源合并）+ LLM 归因，含字段缺失诊断 |
+| ⑦ suggest | LLM | full | 基于异常 + 数据生成可执行运营建议 |
+| ⑧ respond | LLM | simple | 组装最终回答，面向运营人员 |
 
 ### 路由策略
 
 ```
 chat 意图       → understand → respond（2 节点）
-lookup 意图     → 跳过 detect/suggest（5 节点）
-anomaly/advice  → 全链路（7 节点）
+lookup 意图     → 跳过 data_check/detect/suggest（5 节点）
+anomaly/advice  → 全链路 + 数据完整性环：data_check 不完整 → plan 补调（≤1 次）
 plan 无 tool_calls → respond（无需调工具时直接应答）
 ```
 
@@ -133,19 +136,20 @@ plan 无 tool_calls → respond（无需调工具时直接应答）
 ```
 ├── src/
 │   ├── mcp_server/         # MCP Server ✅
-│   │   ├── db.py           #   PostgreSQL 连接池 + 7 条固定参数化 SQL
-│   │   ├── tools.py        #   7 工具函数（参数校验 + 格式化返回 + 错误处理）
+│   │   ├── db.py           #   PostgreSQL 连接池 + 8 条固定参数化 SQL
+│   │   ├── tools.py        #   8 工具函数（参数校验 + 格式化返回 + 错误处理）
 │   │   └── server.py       #   FastMCP 入口（3 种传输模式）
 │   ├── agent/              # LangGraph Agent ✅
-│   │   ├── state.py        #   AgentState TypedDict（11 字段）
+│   │   ├── state.py        #   AgentState TypedDict（14 字段）
 │   │   ├── prompts.py      #   7 个节点 prompt 模板
-│   │   ├── graph.py        #   状态机（7 节点 + 4 条件路由）
+│   │   ├── graph.py        #   状态机（8 节点 + 5 条件路由 + 数据完整性环）
+│   │   ├── logger.py       #   节点级结构化日志（DEBUG/INFO/WARNING）
 │   │   ├── mcp_client.py   #   MCP streamable-http 客户端封装
 │   │   ├── tool_adapter.py #   MCP schema → OpenAI function 格式
 │   │   ├── config_loader.py#   metrics.yaml 加载
 │   │   └── run.py          #   CLI 交互入口
 │   └── config/             # 业务口径配置
-│       └── metrics.yaml    #   动销率/转化率/异常阈值
+│       └── metrics.yaml    #   6 业务口径 + 6 条异常检测规则
 ├── scripts/
 │   └── explore_db.py       # 数据库结构探索工具
 ├── tests/
@@ -166,12 +170,13 @@ plan 无 tool_calls → respond（无需调工具时直接应答）
 | 决策 | 选什么 | 为什么不选另一个 |
 |------|--------|------------------|
 | **不做 Text-to-SQL** | 语义化工具 + 固定 SQL | 准确率 100%、安全边界清晰 |
-| **原始表优先，派生表辅助** | 6 个原始表工具 + 1 个 ETL 工具 | ETL 可能有误差，关键结论需交叉验证 |
+| **原始表优先，派生表辅助** | 7 个原始表工具 + 1 个 ETL 工具 | ETL 可能有误差，关键结论需交叉验证 |
 | **Agent 不碰 SQL** | MCP 工具封装 | 安全边界清晰，Agent 只管"调哪个工具 + 传什么参" |
 | **MCP streamable-http** | 双进程 HTTP 通信 | Agent 和 MCP Server 独立演进、独立部署 |
 | **Function Calling** | LLM 原生 tool_calls | 比 Text-to-JSON 格式更可靠，不会解析错误 |
-| **7 节点全搭** | 一次写好完整框架 | 后续只需调阈值和 prompt，不返工 |
+| **8 节点全搭** | 一次写好完整框架 | 后续只需调阈值和 prompt，不返工 |
 | **规则检测 + LLM 归因** | 混合策略 | 检测要可靠（规则），归因要智能（LLM） |
+| **数据完整性环** | plan ⇄ call_tools ⇄ data_check | 代码层保证异常规则所需数据源不遗漏，2 轮熔断降级 |
 | **DeepSeek V4 Pro** | langchain-openai ChatOpenAI 接入 | OpenAI 兼容 API，切换成本低 |
 
 ---
@@ -180,7 +185,7 @@ plan 无 tool_calls → respond（无需调工具时直接应答）
 
 | 阶段 | 内容 | 状态 |
 |------|------|------|
-| Phase 1 MCP | 7 个语义化数据工具 + store_id 过滤 + 3 种传输模式 | ✅ |
-| Phase 1 Agent | 7 节点全框架 + streamable-http 通信 + Function Calling | ✅ |
-| Phase 1 后续 | detect 规则阈值调优 + prompt 迭代 | ⏭ |
+| Phase 1 MCP | 8 个语义化数据工具 + store_id 过滤 + 3 种传输模式 | ✅ |
+| Phase 1 Agent | 8 节点全框架 + 数据完整性环 + 6 条规则扫描 + Function Calling | ✅ |
+| Phase 1 后续 | detect 规则聚合优化（日粒度 → 月累计）+ prompt 迭代 | ⏭ |
 | Phase 2 | 评测闭环（20 道测试题 + 准确率指标） | ⏭ |
