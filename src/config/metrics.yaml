@@ -91,8 +91,8 @@ anomaly_rules:
         value: 300
       - field: sold_units
         op: "lte"
-        value: 1
-    description: "CTR ≥3% 且 花费 ≥300₽ 且 成交≤1单 → 主图好但转化差"
+        value: 5
+    description: "CTR ≥3% 且 花费 ≥300₽ 且 月成交≤5单 → 主图好但转化差"
     # NOTE: cvr 列不存在，用 sold_units≤1 作为转化差的代理指标
 
   SKU断货风险:

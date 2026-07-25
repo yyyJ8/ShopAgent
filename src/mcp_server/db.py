@@ -14,20 +14,16 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
-
 def _d(s: str) -> dt_date:
     """字符串 → datetime.date，asyncpg 不接受字符串类型的日期参数。"""
     return dt_date.fromisoformat(s)
-
 
 async def _init_conn(conn: asyncpg.Connection) -> None:
     """注册 json/jsonb 编解码器。"""
     for typename in ("json", "jsonb"):
         await conn.set_type_codec(typename, encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
-
 _pool: asyncpg.Pool | None = None
-
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
@@ -45,21 +41,15 @@ async def get_pool() -> asyncpg.Pool:
         )
     return _pool
 
-
 async def close_pool() -> None:
     global _pool
     if _pool:
         await _pool.close()
         _pool = None
 
-
 DEFAULT_LIMIT = 500
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ① get_products
-# ═══════════════════════════════════════════════════════════════════
-
 _PRODUCTS_SQL = """
     SELECT sku_id, product_id, name, offer_id, category_id,
            price, old_price, min_price, commission_fbo_pct,
@@ -75,7 +65,6 @@ _PRODUCTS_SQL = """
     ORDER BY sku_id
 """
 
-
 async def query_products(
     sku_ids: list[int] | None = None,
     status: str | None = None,
@@ -87,11 +76,7 @@ async def query_products(
     rows = await pool.fetch(_PRODUCTS_SQL, sku_ids, status, is_archived, category_id, store_id)
     return [dict(r) for r in rows]
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ② get_postings
-# ═══════════════════════════════════════════════════════════════════
-
 _POSTINGS_SQL = """
     SELECT posting_number, order_number, delivery_schema,
            status, cancel_reason_id,
@@ -106,7 +91,6 @@ _POSTINGS_SQL = """
     ORDER BY created_at DESC
     LIMIT $7
 """
-
 
 async def query_postings(
     date_start: str,
@@ -124,11 +108,7 @@ async def query_postings(
     )
     return [dict(r) for r in rows]
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ③ get_returns
-# ═══════════════════════════════════════════════════════════════════
-
 _RETURNS_SQL = """
     SELECT r.id, r.posting_number, r.sku,
            r.type, r.return_reason_name,
@@ -149,7 +129,6 @@ _RETURNS_SQL = """
     LIMIT $7
 """
 
-
 async def query_returns(
     date_start: str,
     date_end: str,
@@ -166,11 +145,7 @@ async def query_returns(
     )
     return [dict(r) for r in rows]
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ④ get_finance_transactions
-# ═══════════════════════════════════════════════════════════════════
-
 _FINANCE_SQL = """
     SELECT operation_id, operation_type, operation_type_name,
            type, operation_date,
@@ -188,7 +163,6 @@ _FINANCE_SQL = """
     LIMIT $7
 """
 
-
 async def query_finance_transactions(
     date_start: str,
     date_end: str,
@@ -205,11 +179,7 @@ async def query_finance_transactions(
     )
     return [dict(r) for r in rows]
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑤ get_stock_snapshot
-# ═══════════════════════════════════════════════════════════════════
-
 _STOCK_SQL = """
     SELECT s.sku_id, p.name, p.offer_id, p.status AS product_status,
            s.source,
@@ -224,7 +194,6 @@ _STOCK_SQL = """
     ORDER BY s.present ASC
 """
 
-
 async def query_stock_snapshot(
     sku_ids: list[int] | None = None,
     source: str | None = None,
@@ -235,11 +204,7 @@ async def query_stock_snapshot(
     rows = await pool.fetch(_STOCK_SQL, sku_ids, source, low_stock_threshold, store_id)
     return [dict(r) for r in rows]
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑥ get_ad_performance
-# ═══════════════════════════════════════════════════════════════════
-
 _AD_PERFORMANCE_SQL = """
     SELECT a.stat_date, a.campaign_id,
            c.title AS campaign_title, c.campaign_type, c.state AS campaign_state,
@@ -262,7 +227,6 @@ _AD_PERFORMANCE_SQL = """
     LIMIT $7
 """
 
-
 async def query_ad_performance(
     date_start: str,
     date_end: str,
@@ -279,24 +243,22 @@ async def query_ad_performance(
     )
     return [dict(r) for r in rows]
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑦ get_ad_campaign_stats
-# ═══════════════════════════════════════════════════════════════════
-
 _AD_CAMPAIGN_STATS_SQL = """
-    SELECT campaign_id, stat_date,
-           impressions, clicks, spend,
-           orders_count, orders_sum,
-           synced_at, store_id
-    FROM ozon.ad_daily_stats
-    WHERE stat_date BETWEEN $1 AND $2
-      AND ($3::varchar[] IS NULL OR campaign_id = ANY($3))
-      AND ($4::int IS NULL OR store_id = $4)
-    ORDER BY stat_date, spend DESC
+    SELECT a.campaign_id, a.stat_date,
+           c.title AS campaign_title, c.campaign_type, c.state AS campaign_state,
+           c.budget AS campaign_budget,
+           a.impressions, a.clicks, a.spend,
+           a.orders_count, a.orders_sum,
+           a.synced_at, a.store_id
+    FROM ozon.ad_daily_stats a
+    LEFT JOIN ozon.ad_campaigns c ON a.campaign_id = c.campaign_id AND a.store_id = c.store_id
+    WHERE a.stat_date BETWEEN $1 AND $2
+      AND ($3::varchar[] IS NULL OR a.campaign_id = ANY($3))
+      AND ($4::int IS NULL OR a.store_id = $4)
+    ORDER BY a.stat_date, a.spend DESC
     LIMIT $5
 """
-
 
 async def query_ad_campaign_stats(
     date_start: str,
@@ -312,11 +274,7 @@ async def query_ad_campaign_stats(
     )
     return [dict(r) for r in rows]
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑧ get_daily_summary
-# ═══════════════════════════════════════════════════════════════════
-
 _DAILY_SUMMARY_SQL = """
     SELECT d.date, d.sku_id, p.name, p.offer_id, p.status AS product_status,
            d.ordered_units, d.delivered_units, d.returns_units, d.cancelled_units,
@@ -335,7 +293,6 @@ _DAILY_SUMMARY_SQL = """
     ORDER BY d.date, d.net_profit DESC
     LIMIT $6
 """
-
 
 async def query_daily_summary(
     date_start: str,

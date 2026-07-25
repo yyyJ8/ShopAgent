@@ -29,10 +29,7 @@ from .prompts import (
 from .state import AgentState
 from .tool_adapter import adapt_tools
 
-# ═══════════════════════════════════════════════════════════════════
 # LLM 初始化
-# ═══════════════════════════════════════════════════════════════════
-
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 _api_key = os.getenv("DEEPSEEK_API_KEY", "")
@@ -57,11 +54,7 @@ full_llm = ChatOpenAI(
     temperature=0.3,
 )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ① understand — 意图分类 + 实体提取
-# ═══════════════════════════════════════════════════════════════════
-
 async def understand_node(state: AgentState) -> dict:
     log_node_start("understand", state)
     system = UNDERSTAND_SYSTEM.format(user_query=state["user_query"])
@@ -80,11 +73,7 @@ async def understand_node(state: AgentState) -> dict:
     log_node_end("understand", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ② plan — LLM + Function Calling 决定工具调用
-# ═══════════════════════════════════════════════════════════════════
-
 async def plan_node(state: AgentState, plan_llm) -> dict:
     """plan_llm 通过闭包注入（build_graph 时 bind_tools 后传入）。
     补调轮次：missing_sources 非空时追加提示，要求 LLM 补调缺失工具。"""
@@ -115,11 +104,7 @@ async def plan_node(state: AgentState, plan_llm) -> dict:
     log_node_end("plan", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ③ call_tools — MCP streamable-http 并行执行
-# ═══════════════════════════════════════════════════════════════════
-
 async def call_tools_node(state: AgentState) -> dict:
     log_node_start("call_tools", state)
     messages = state.get("messages", [])
@@ -135,7 +120,26 @@ async def call_tools_node(state: AgentState) -> dict:
         return output
 
     tool_calls = last_msg.tool_calls
+
+    # 补调轮：过滤已调过的工具，避免重复拉数据和 LLM token 浪费
+    if (state.get("plan_iteration") or 0) > 0:
+        seen = set()
+        for key in state.get("tool_results", {}):
+            seen.add(key.split("#")[0])
+        filtered = [tc for tc in tool_calls if tc["name"] not in seen]
+        skipped = len(tool_calls) - len(filtered)
+        if skipped:
+            logger = logging.getLogger("ozon-agent")
+            logger.info("  call_tools: re-plan round, %d/%d tools skipped (already fetched)",
+                        skipped, len(tool_calls))
+        tool_calls = filtered
+
     calls = [{"name": tc["name"], "args": tc["args"]} for tc in tool_calls]
+
+    if not calls:
+        output = {"messages": [], "tool_results": state.get("tool_results", {})}
+        log_node_end("call_tools", output)
+        return output
 
     client = await get_client()
     results = await client.call_tools_parallel(calls)
@@ -159,11 +163,7 @@ async def call_tools_node(state: AgentState) -> dict:
     log_node_end("call_tools", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ③½ data_check — 数据完整性校验（纯代码，无 LLM 调用）
-# ═══════════════════════════════════════════════════════════════════
-
 def _get_required_sources(config: dict) -> dict[str, list[str]]:
     """从 anomaly_rules 提取每个 data_source 被哪些规则依赖。
     返回 {"get_ad_performance": ["广告DRR过高", "高点击低转化"], ...}
@@ -175,7 +175,6 @@ def _get_required_sources(config: dict) -> dict[str, list[str]]:
             if src:
                 source_to_rules.setdefault(src, []).append(rule_name)
     return source_to_rules
-
 
 def data_check_node(state: AgentState) -> dict:
     """检查 tool_results 是否覆盖了 anomaly_rules 所需的全部数据源。
@@ -224,11 +223,7 @@ def data_check_node(state: AgentState) -> dict:
     log_node_end("data_check", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ④ analyze — 数据解读 + 交叉验证
-# ═══════════════════════════════════════════════════════════════════
-
 async def analyze_node(state: AgentState) -> dict:
     log_node_start("analyze", state)
     config_metrics = state.get("config", {}).get("metrics", {})
@@ -246,11 +241,7 @@ async def analyze_node(state: AgentState) -> dict:
     log_node_end("analyze", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑤ detect — 规则扫描（代码）+ 归因（LLM）
-# ═══════════════════════════════════════════════════════════════════
-
 def _resolve_severity(fields: dict, severity_map: dict, ref_field: str | None) -> str:
     """从 severity_map 解析严重级别。按定义顺序，首个匹配的级别胜出。
     例：{"critical": "< 0 → 亏损", "warning": "< 10 → 利润过低"}"""
@@ -284,7 +275,6 @@ def _resolve_severity(fields: dict, severity_map: dict, ref_field: str | None) -
 
     return "warning"
 
-
 def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> list:
     """阈值检测：遍历 conditions，对 tool_results 中对应数据源的每行做字段比对。
 
@@ -295,8 +285,8 @@ def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> l
     data_source_str = rule_config.get("data_source", "")
     source_names = [s.strip() for s in data_source_str.split("+")]
 
-    # 2. 从 tool_results 收集匹配数据，按 sku_id 合并行
-    merged: dict[int, dict] = {}  # sku_id → {合并字段}
+    # 2. 从 tool_results 收集匹配数据，按 sku_id 分组
+    rows_by_sku: dict[int, list[dict]] = {}
     for source_name in source_names:
         for key, result in tool_results.items():
             if not key.startswith(source_name):
@@ -307,10 +297,54 @@ def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> l
                 sku_id = row.get("sku_id") or row.get("sku")  # get_returns 表列名是 sku
                 if sku_id is None:
                     continue
-                merged.setdefault(sku_id, {}).update(row)
+                rows_by_sku.setdefault(sku_id, []).append(row)
+
+    # 诊断：数据源在 tool_results 中未找到（放在任何 return 之前）
+    _log = logging.getLogger("ozon-agent")
+    found_sources = set()
+    for sn in source_names:
+        for key in tool_results:
+            if key.startswith(sn):
+                found_sources.add(sn)
+                break
+    for sn in source_names:
+        if sn not in found_sources:
+            _log.warning("  detect/%s: data_source %r not found in tool_results (keys=%s)",
+                         rule_name, sn, list(tool_results.keys()))
+
+    if not rows_by_sku:
+        return []
+
+    # 2.5 按 sku_id 聚合：数值字段 sum，比例/快照/文本取末值
+    _NO_SUM_FIELDS = frozenset({
+        "profit_margin", "drr_total", "drr_promotion", "ctr", "avg_cpc",
+        "present", "stock_present", "stock_reserved",
+        "data_quality", "product_status", "sku_price", "campaign_state",
+    })
+    merged: dict[int, dict] = {}
+    for sku_id, rows in rows_by_sku.items():
+        combined: dict = {}
+        for row in rows:
+            for k, v in row.items():
+                if v is None:
+                    continue
+                if k in _NO_SUM_FIELDS or not isinstance(v, (int, float)):
+                    combined[k] = v  # 比例/快照/文本：取末行值
+                else:
+                    combined[k] = combined.get(k, 0) + v  # 数值：累加
+        merged[sku_id] = combined
 
     if not merged:
         return []
+
+    # 2.6 重算比例字段：用 sum(分子)/sum(分母) 替代日粒度末值
+    for fields in merged.values():
+        if "net_profit" in fields and "revenue" in fields and fields["revenue"] != 0:
+            fields["profit_margin"] = fields["net_profit"] / fields["revenue"] * 100
+        if "spend" in fields and "total_ordered" in fields and fields["total_ordered"] != 0:
+            fields["drr_total"] = fields["spend"] / fields["total_ordered"] * 100
+        if "clicks" in fields and "impressions" in fields and fields["impressions"] != 0:
+            fields["ctr"] = fields["clicks"] / fields["impressions"] * 100
 
     # 3. 提取规则配置
     conditions = rule_config.get("conditions", [])
@@ -359,22 +393,6 @@ def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> l
             "description": rule_config.get("description", ""),
         })
 
-    # 诊断：数据源在 tool_results 中未找到（放在 merged 判空前，确保空数据也能报）
-    _log = logging.getLogger("ozon-agent")
-    found_sources = set()
-    for sn in source_names:
-        for key in tool_results:
-            if key.startswith(sn):
-                found_sources.add(sn)
-                break
-    for sn in source_names:
-        if sn not in found_sources:
-            _log.warning("  detect/%s: data_source %r not found in tool_results (keys=%s)",
-                         rule_name, sn, list(tool_results.keys()))
-
-    if not merged:
-        return []
-
     # 诊断：字段缺失统计（按缺失行数降序）
     for f, cnt in sorted(missing_count.items(), key=lambda x: -x[1]):
         _log.warning("  detect/%s: field %r missing in %d/%d rows",
@@ -382,18 +400,15 @@ def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> l
 
     return anomalies
 
-
 def _check_mom(tool_results: dict, rule_config: dict, rule_name: str) -> list:
     """环比检测：对比当前窗口 vs 前 N 天均值。
     框架占位——需要前后两段时间窗口的数据做对比。"""
     return []
 
-
 RULE_HANDLERS = {
     "环比": _check_mom,
     "阈值": _check_threshold,
 }
-
 
 async def detect_node(state: AgentState) -> dict:
     log_node_start("detect", state)
@@ -440,11 +455,7 @@ async def detect_node(state: AgentState) -> dict:
     log_node_end("detect", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑥ suggest — 运营建议
-# ═══════════════════════════════════════════════════════════════════
-
 async def suggest_node(state: AgentState) -> dict:
     log_node_start("suggest", state)
     config_metrics = state.get("config", {}).get("metrics", {})
@@ -468,11 +479,7 @@ async def suggest_node(state: AgentState) -> dict:
     log_node_end("suggest", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑦ respond — 组装最终回答
-# ═══════════════════════════════════════════════════════════════════
-
 async def respond_node(state: AgentState) -> dict:
     log_node_start("respond", state)
     context = {
@@ -502,16 +509,11 @@ async def respond_node(state: AgentState) -> dict:
     log_node_end("respond", output)
     return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # 路由函数
-# ═══════════════════════════════════════════════════════════════════
-
 def route_after_understand(state: AgentState) -> str:
     if state.get("intent") == "chat":
         return "respond"
     return "plan"
-
 
 def route_after_plan(state: AgentState) -> str:
     messages = state.get("messages", [])
@@ -522,13 +524,11 @@ def route_after_plan(state: AgentState) -> str:
         return "call_tools"
     return "respond"
 
-
 def route_after_analyze(state: AgentState) -> str:
     intent = state.get("intent", "lookup")
     if intent in ("anomaly", "advice"):
         return "detect"
     return "respond"
-
 
 def route_after_data_check(state: AgentState) -> str:
     """数据完整性检查后路由：
@@ -554,11 +554,7 @@ def route_after_data_check(state: AgentState) -> str:
 
     return "plan"
 
-
-# ═══════════════════════════════════════════════════════════════════
 # build_graph — 异步构建（先连 MCP Server 拿工具列表）
-# ═══════════════════════════════════════════════════════════════════
-
 async def build_graph() -> StateGraph:
     # 1. 连接 MCP Server，获取工具列表 → 转 OpenAI function 格式
     client = await get_client()

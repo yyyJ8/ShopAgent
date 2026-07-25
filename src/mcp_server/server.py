@@ -16,11 +16,7 @@ mcp = FastMCP(
     port=int(os.getenv("MCP_PORT", "8000")),
 )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ① get_products  — 商品主数据
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_products(
     sku_ids: list[int] | None = None,
@@ -45,11 +41,7 @@ async def get_products(
         sku_ids=sku_ids, status=status, is_archived=is_archived, category_id=category_id, store_id=store_id,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ② get_postings — 订单/发货数据
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_postings(
     date_start: str,
@@ -80,11 +72,7 @@ async def get_postings(
         store_id=store_id, limit=limit,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ③ get_returns — 退货数据
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_returns(
     date_start: str,
@@ -115,11 +103,7 @@ async def get_returns(
         store_id=store_id, limit=limit,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ④ get_finance_transactions — 财务流水
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_finance_transactions(
     date_start: str,
@@ -151,11 +135,7 @@ async def get_finance_transactions(
         store_id=store_id, limit=limit,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑤ get_stock_snapshot — 实时库存
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_stock_snapshot(
     sku_ids: list[int] | None = None,
@@ -179,11 +159,7 @@ async def get_stock_snapshot(
         sku_ids=sku_ids, source=source, low_stock_threshold=low_stock_threshold, store_id=store_id,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑥ get_ad_performance — 广告表现
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_ad_performance(
     date_start: str,
@@ -215,11 +191,7 @@ async def get_ad_performance(
         store_id=store_id, limit=limit,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑦ get_ad_campaign_stats — 广告计划粒度日统计
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_ad_campaign_stats(
     date_start: str,
@@ -246,11 +218,7 @@ async def get_ad_campaign_stats(
         campaign_ids=campaign_ids, store_id=store_id, limit=limit,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑧ get_daily_summary — 日汇总（⚠️ 派生数据）
-# ═══════════════════════════════════════════════════════════════════
-
 @mcp.tool()
 async def get_daily_summary(
     date_start: str,
@@ -279,8 +247,6 @@ async def get_daily_summary(
         sku_ids=sku_ids, data_quality=data_quality, store_id=store_id, limit=limit,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
 # 入口
 #
 # 通过 MCP_TRANSPORT 环境变量切换传输模式：
@@ -293,8 +259,6 @@ async def get_daily_summary(
 #
 # Agent 集成配置示例（mcp_servers.json）：
 #   {"ozon-data": {"command": "python", "args": ["-m", "src.mcp_server.server"], "cwd": "D:/OzonAgent"}}
-# ═══════════════════════════════════════════════════════════════════
-
 if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
 

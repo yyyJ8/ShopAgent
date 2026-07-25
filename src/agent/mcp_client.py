@@ -12,7 +12,6 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 
-
 class MCPClient:
     """MCP 客户端：管理 streamable-http 连接 + ClientSession 生命周期。"""
 
@@ -23,10 +22,7 @@ class MCPClient:
         self._session_ctx = None    # ClientSession 的上下文
         self._tools: list = []      # MCP Tool 对象列表
 
-    # ═══════════════════════════════════════════════════════════════════
     # 连接管理
-    # ═══════════════════════════════════════════════════════════════════
-
     async def connect(self) -> list:
         """建立连接：嵌套进入两个 async context，initialize，list_tools。
         返回 MCP Tool 对象列表。"""
@@ -59,10 +55,7 @@ class MCPClient:
     def tools(self) -> list:
         return self._tools
 
-    # ═══════════════════════════════════════════════════════════════════
     # 工具调用
-    # ═══════════════════════════════════════════════════════════════════
-
     async def call_tool(self, name: str, args: dict) -> dict:
         """调单个工具。返回统一格式 {data, row_count, error?}（和 tools.py 对齐）。"""
         try:
@@ -105,13 +98,8 @@ class MCPClient:
                     output[f"{name}#{len(output)}"] = result
         return output
 
-
-# ═══════════════════════════════════════════════════════════════════
 # 模块级单例
-# ═══════════════════════════════════════════════════════════════════
-
 _client: MCPClient | None = None
-
 
 async def get_client() -> MCPClient:
     """获取或创建 MCPClient 单例（自动 connect）。"""
@@ -120,7 +108,6 @@ async def get_client() -> MCPClient:
         _client = MCPClient()
         await _client.connect()
     return _client
-
 
 async def close_client() -> None:
     """关闭 MCP 客户端连接。"""

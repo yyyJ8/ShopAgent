@@ -37,43 +37,12 @@ python -m src.agent.run
 
 ## 架构
 
-### 系统拓扑
-
 ```
 用户 → LangGraph Agent → MCP Server (FastMCP) → PostgreSQL
          streamable-http        asyncpg 连接池
 ```
 
-### Agent 内部流转
-
-下图展示 **anomaly/advice 意图**的完整链路（含数据完整性环）：
-
-```mermaid
-flowchart LR
-    START([用户提问]) --> N1[① understand<br/>意图分类 + 实体提取]
-
-    N1 --> N2[② plan<br/>Function Calling 选工具填参]
-
-    N2 -- "有 tool_calls" --> N3[③ call_tools<br/>并行执行 MCP]
-    N2 -- "无需工具" --> N8
-
-    N3 --> N4{④ data_check<br/>数据源覆盖检查}
-
-    N4 -- "缺失 ≤1次补调" --> N2
-    N4 -- "完整 / 熔断≥2轮" --> N5
-
-    N5[⑤ analyze<br/>数据解读 + 交叉验证] --> N6[⑥ detect<br/>规则扫描 + LLM归因]
-    N6 --> N7[⑦ suggest<br/>运营建议]
-    N7 --> N8[⑧ respond<br/>组装最终回答]
-
-    N8 --> END([返回用户])
-```
-
-**路由捷径：**
-- `chat` 意图：understand → respond（2 节点直达）
-- `lookup` 意图：跳过 data_check / detect / suggest（5 节点）
-
-> 节点职责详见下方 [Agent 节点](#agent-节点8-节点--5-条件路由) 表格，MCP 工具列表见 [MCP 工具](#mcp-工具) 表格。
+> Agent 节点流转详见下方 [Agent 节点](#agent-节点8-节点--5-条件路由) 和 [路由策略](#路由策略)。
 
 ---
 
@@ -92,16 +61,16 @@ flowchart LR
 
 ## MCP 工具
 
-| 工具 | 数据源 | 可靠度 | 说明 |
-|------|--------|--------|------|
-| ① get_products | products 原始表 | ⭐⭐⭐ 高 | 商品主数据，按 SKU/状态/类目/店铺筛选 |
-| ② get_postings | postings 原始表 | ⭐⭐⭐ 高 | 订单/发货，含 products jsonb 明细 |
-| ③ get_returns | returns 原始表 | ⭐⭐⭐ 高 | 退货记录 + 退货原因（俄文），SKU 列名为 `sku` |
-| ④ get_finance_transactions | finance_transactions 原始表 | ⭐⭐⭐ 高 | 操作级财务流水，13 种 operation_type |
-| ⑤ get_stock_snapshot | stocks 原始表 | ⭐⭐⭐ 高 | 实时库存（present/reserved × FBO/FBS） |
-| ⑥ get_ad_performance | ad_sku_daily_stats | ⭐⭐ 中 | SKU × 计划 × 天广告表现，含 ctr/drr_total/spend/sold_units |
-| ⑦ get_ad_campaign_stats | ad_daily_stats | ⭐⭐ 中 | 计划级日统计，含 orders_count/orders_sum，无 SKU 粒度 |
-| ⑧ get_daily_summary | sku_daily_summary ETL | ⭐ 低-中 | SKU 日损益汇总，关键结论需交叉验证原始表 |
+| 工具 | 数据源 | 说明 |
+|------|--------|------|
+| ① get_products | products 原始表 | 商品主数据，按 SKU/状态/类目/店铺筛选 |
+| ② get_postings | postings 原始表 | 订单/发货，含 products jsonb 明细 |
+| ③ get_returns | returns 原始表 | 退货记录 + 退货原因（俄文），SKU 列名为 `sku` |
+| ④ get_finance_transactions | finance_transactions 原始表 | 操作级财务流水，13 种 operation_type |
+| ⑤ get_stock_snapshot | stocks 原始表 | 实时库存（present/reserved × FBO/FBS） |
+| ⑥ get_ad_performance | ad_sku_daily_stats | SKU × 计划 × 天广告表现，含 ctr/drr_total/spend/sold_units |
+| ⑦ get_ad_campaign_stats | ad_daily_stats | 计划级日统计，含 orders_count/orders_sum，无 SKU 粒度 |
+| ⑧ get_daily_summary | sku_daily_summary ETL | SKU 日损益汇总，关键结论需交叉验证原始表 |
 
 所有工具支持可选 `store_id`，不传 = 全平台汇总。
 
@@ -135,11 +104,11 @@ plan 无 tool_calls → respond（无需调工具时直接应答）
 
 ```
 ├── src/
-│   ├── mcp_server/         # MCP Server ✅
+│   ├── mcp_server/         # MCP Server
 │   │   ├── db.py           #   PostgreSQL 连接池 + 8 条固定参数化 SQL
 │   │   ├── tools.py        #   8 工具函数（参数校验 + 格式化返回 + 错误处理）
 │   │   └── server.py       #   FastMCP 入口（3 种传输模式）
-│   ├── agent/              # LangGraph Agent ✅
+│   ├── agent/              # LangGraph Agent
 │   │   ├── state.py        #   AgentState TypedDict（14 字段）
 │   │   ├── prompts.py      #   7 个节点 prompt 模板
 │   │   ├── graph.py        #   状态机（8 节点 + 5 条件路由 + 数据完整性环）

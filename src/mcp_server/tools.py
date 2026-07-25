@@ -7,9 +7,7 @@ from datetime import date
 
 from . import db
 
-
 MAX_DATE_RANGE_DAYS = 90
-
 
 def _validate_date_range(date_start: str, date_end: str) -> tuple[str, str] | str:
     try:
@@ -23,14 +21,11 @@ def _validate_date_range(date_start: str, date_end: str) -> tuple[str, str] | st
         return f"日期范围 {(end - start).days} 天，超过最大限制 {MAX_DATE_RANGE_DAYS} 天"
     return (date_start, date_end)
 
-
 def _format_result(tool_name: str, args: dict, rows: list[dict]) -> dict:
     return {"tool": tool_name, "args": args, "row_count": len(rows), "data": rows}
 
-
 def _format_error(tool_name: str, args: dict, error: str) -> dict:
     return {"tool": tool_name, "args": args, "row_count": 0, "data": [], "error": error}
-
 
 def _check_sku_ids(sku_ids) -> str | None:
     if sku_ids is not None:
@@ -38,11 +33,7 @@ def _check_sku_ids(sku_ids) -> str | None:
             return "sku_ids 必须是整数列表"
     return None
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ① get_products
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_products(
     sku_ids: list[int] | None = None,
     status: str | None = None,
@@ -58,11 +49,7 @@ async def get_products(
     except Exception as e:
         return _format_error("get_products", args, str(e))
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ② get_postings
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_postings(
     date_start: str,
     date_end: str,
@@ -80,11 +67,7 @@ async def get_postings(
     except Exception as e:
         return _format_error("get_postings", args, str(e))
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ③ get_returns
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_returns(
     date_start: str,
     date_end: str,
@@ -103,11 +86,7 @@ async def get_returns(
     except Exception as e:
         return _format_error("get_returns", args, str(e))
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ④ get_finance_transactions
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_finance_transactions(
     date_start: str,
     date_end: str,
@@ -125,11 +104,7 @@ async def get_finance_transactions(
     except Exception as e:
         return _format_error("get_finance_transactions", args, str(e))
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑤ get_stock_snapshot
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_stock_snapshot(
     sku_ids: list[int] | None = None,
     source: str | None = None,
@@ -144,11 +119,7 @@ async def get_stock_snapshot(
     except Exception as e:
         return _format_error("get_stock_snapshot", args, str(e))
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑥ get_ad_performance
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_ad_performance(
     date_start: str,
     date_end: str,
@@ -167,11 +138,7 @@ async def get_ad_performance(
     except Exception as e:
         return _format_error("get_ad_performance", args, str(e))
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑦ get_ad_campaign_stats
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_ad_campaign_stats(
     date_start: str,
     date_end: str,
@@ -187,11 +154,7 @@ async def get_ad_campaign_stats(
     except Exception as e:
         return _format_error("get_ad_campaign_stats", args, str(e))
 
-
-# ═══════════════════════════════════════════════════════════════════
 # ⑧ get_daily_summary
-# ═══════════════════════════════════════════════════════════════════
-
 async def get_daily_summary(
     date_start: str,
     date_end: str,
