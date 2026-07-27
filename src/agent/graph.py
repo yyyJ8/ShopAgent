@@ -142,10 +142,10 @@ async def call_tools_node(state: AgentState) -> dict:
         return output
 
     client = await get_client()
-    results = await client.call_tools_parallel(calls)
+    new_results = await client.call_tools_parallel(calls)
 
     # 补调场景：合并已有 tool_results，保留前一轮的结果
-    results = {**state.get("tool_results", {}), **results}
+    results = {**state.get("tool_results", {}), **new_results}
 
     tool_messages = []
     for i, tc in enumerate(tool_calls):
@@ -159,9 +159,10 @@ async def call_tools_node(state: AgentState) -> dict:
             name=name,
         ))
 
-    output = {"messages": tool_messages, "tool_results": results}
+    # 日志只打本轮新增的结果，避免补调时重复刷屏
+    output = {"messages": tool_messages, "tool_results": new_results}
     log_node_end("call_tools", output)
-    return output
+    return {"messages": tool_messages, "tool_results": results}
 
 # ③½ data_check — 数据完整性校验（纯代码，无 LLM 调用）
 def _get_required_sources(config: dict) -> dict[str, list[str]]:
@@ -321,6 +322,16 @@ def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> l
         "present", "stock_present", "stock_reserved",
         "data_quality", "product_status", "sku_price", "campaign_state",
     })
+
+    def _as_number(v):
+        """将 Decimal / 字符串 / float 统一转 float，不可转则返回 None。"""
+        if isinstance(v, (int, float)):
+            return float(v)
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
     merged: dict[int, dict] = {}
     for sku_id, rows in rows_by_sku.items():
         combined: dict = {}
@@ -328,10 +339,14 @@ def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> l
             for k, v in row.items():
                 if v is None:
                     continue
-                if k in _NO_SUM_FIELDS or not isinstance(v, (int, float)):
+                if k in _NO_SUM_FIELDS:
                     combined[k] = v  # 比例/快照/文本：取末行值
                 else:
-                    combined[k] = combined.get(k, 0) + v  # 数值：累加
+                    n = _as_number(v)
+                    if n is not None:
+                        combined[k] = combined.get(k, 0) + n  # 数值：累加
+                    else:
+                        combined[k] = v  # 非数值：取末行值
         merged[sku_id] = combined
 
     if not merged:
@@ -339,12 +354,18 @@ def _check_threshold(tool_results: dict, rule_config: dict, rule_name: str) -> l
 
     # 2.6 重算比例字段：用 sum(分子)/sum(分母) 替代日粒度末值
     for fields in merged.values():
-        if "net_profit" in fields and "revenue" in fields and fields["revenue"] != 0:
-            fields["profit_margin"] = fields["net_profit"] / fields["revenue"] * 100
-        if "spend" in fields and "total_ordered" in fields and fields["total_ordered"] != 0:
-            fields["drr_total"] = fields["spend"] / fields["total_ordered"] * 100
-        if "clicks" in fields and "impressions" in fields and fields["impressions"] != 0:
-            fields["ctr"] = fields["clicks"] / fields["impressions"] * 100
+        n = _as_number(fields.get("net_profit"))
+        d = _as_number(fields.get("revenue"))
+        if n is not None and d is not None and d != 0:
+            fields["profit_margin"] = n / d * 100
+        n = _as_number(fields.get("spend"))
+        d = _as_number(fields.get("total_ordered"))
+        if n is not None and d is not None and d != 0:
+            fields["drr_total"] = n / d * 100
+        n = _as_number(fields.get("clicks"))
+        d = _as_number(fields.get("impressions"))
+        if n is not None and d is not None and d != 0:
+            fields["ctr"] = n / d * 100
 
     # 3. 提取规则配置
     conditions = rule_config.get("conditions", [])
