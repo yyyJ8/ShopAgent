@@ -16,21 +16,42 @@ from src.agent.config_loader import load_config
 graph = None
 _init_lock = asyncio.Lock()
 
-# 节点 → 阶段标题（只对顶层图节点显示）
-NODE_SECTION = {
-    "understand": "🔍 意图识别",
-    "plan":       "📋 查询规划",
-    "call_tools": "📊 数据获取",
-    "data_check": "✅ 完整性检查",
-    "analyze":    "🧠 数据分析",
-    "detect":     "⚠️ 异常检测",
-    "suggest":    "💡 运营建议",
-    "respond":    "📝 最终回答",
+NODE_LABEL = {
+    "understand": "分析意图",
+    "plan":       "规划查询",
+    "call_tools": "获取数据",
+    "data_check": "完整性检查",
+    "analyze":    "分析数据",
+    "detect":     "检测异常",
+    "suggest":    "生成建议",
+    "respond":    "生成回答",
 }
+
+NODE_ORDER = ["understand", "plan", "call_tools", "data_check", "analyze", "detect", "suggest", "respond"]
+
+
+def _build_progress(node_state: dict, tool_parts: list[str]) -> str:
+    """根据节点状态拼进度树。"""
+    lines = []
+    for name in NODE_ORDER:
+        status = node_state.get(name)
+        if status is None:
+            continue
+        label = NODE_LABEL[name]
+        if status == "active":
+            lines.append(f"⏳ {label}...")
+        elif status == "done":
+            if name == "call_tools" and tool_parts:
+                lines.append(f"✅ {label}")
+                for tp in tool_parts:
+                    lines.append(f"   {tp}")
+            else:
+                suffix = node_state.get("_anomaly_count", "") if name == "detect" else ""
+                lines.append(f"✅ {label}{suffix}")
+    return "\n".join(lines)
 
 
 async def respond(message: str, history: list):
-    """流式执行 Agent，展示 LLM 逐 token 思考过程 + 节点进度。"""
     global graph
     if graph is None:
         async with _init_lock:
@@ -46,82 +67,69 @@ async def respond(message: str, history: list):
     }
     config = {"configurable": {"thread_id": "gradio-session"}}
 
-    sections: list[tuple[str, list[str]]] = []  # [(标题, [内容...]), ...]
-    seen: set[str] = set()                       # 已出现过的标题
-    current_llm_node: str | None = None          # 当前在生成 token 的节点
-    final_answer = ""
+    node_state: dict[str, str] = {}
+    tool_parts: list[str] = []
+    answer_tokens: list[str] = []
 
     async for event in graph.astream_events(state, config, version="v2"):
         kind = event["event"]
         name = event["name"]
 
-        # ── 节点开始 → 插入阶段标题 ──
-        if kind == "on_chain_start" and name in NODE_SECTION:
-            title = NODE_SECTION[name]
-            if title not in seen:
-                seen.add(title)
-                sections.append((title, []))
-            if name in ("understand", "plan", "analyze", "detect", "suggest", "respond"):
-                current_llm_node = name
+        # ── 节点开始 → 立即推送 ⏳ ──
+        if kind == "on_chain_start" and name in NODE_LABEL:
+            node_state[name] = "active"
+            if name != "respond":
+                yield _build_progress(node_state, tool_parts)
 
-        # ── LLM 逐 token 输出 ──
-        elif kind == "on_chat_model_stream":
+        # ── LLM 逐 token（只捕获 respond 节点）──
+        elif kind == "on_chat_model_stream" and node_state.get("respond") == "active":
             chunk = event["data"]["chunk"]
             if isinstance(chunk, AIMessageChunk) and chunk.content:
                 token = chunk.content
                 if isinstance(token, list):
                     token = "".join(str(t) for t in token if isinstance(t, str))
-                if token and current_llm_node:
-                    title = NODE_SECTION.get(current_llm_node, current_llm_node)
-                    for sec_title, tokens in sections:
-                        if sec_title == title:
-                            tokens.append(token)
-                            break
+                if token:
+                    answer_tokens.append(token)
+                    progress = _build_progress(node_state, tool_parts)
+                    yield progress + "\n\n---\n\n" + "".join(answer_tokens)
 
-        # ── 节点结束 → 捕获 tool_results 和 final_answer ──
-        elif kind == "on_chain_end" and name in NODE_SECTION:
-            if name == current_llm_node:
-                current_llm_node = None  # LLM 阶段结束
-
-            output = event["data"].get("output", {})
-
-            if name == "call_tools" and isinstance(output, dict):
+        # ── 节点结束 ──
+        elif kind == "on_chain_end" and name in NODE_LABEL:
+            if name == "call_tools":
+                output = event["data"].get("output", {})
                 results = output.get("tool_results", {})
-                title = NODE_SECTION["call_tools"]
-                for sec_title, tokens in sections:
-                    if sec_title == title:
-                        for k, v in results.items():
-                            tool_name = k.split("#")[0]
-                            rows = v.get("row_count", 0)
-                            err = v.get("error")
-                            if err:
-                                tokens.append(f"\n❌ {tool_name}: {err}")
-                            else:
-                                tokens.append(f"\n✅ {tool_name}: {rows} 行")
-                        break
+                tool_parts.clear()
+                for k, v in results.items():
+                    tool_name = k.split("#")[0]
+                    rows = v.get("row_count", 0)
+                    err = v.get("error")
+                    if err:
+                        tool_parts.append(f"❌ {tool_name}: {err}")
+                    else:
+                        tool_parts.append(f"✅ {tool_name}: {rows} 行")
 
-            if name == "respond" and isinstance(output, dict):
-                final_answer = output.get("final_answer", "")
+            elif name == "detect":
+                output = event["data"].get("output", {})
+                anomalies = output.get("anomalies", [])
+                if anomalies:
+                    critical = sum(1 for a in anomalies if a.get("severity") == "critical")
+                    warning = sum(1 for a in anomalies if a.get("severity") == "warning")
+                    parts = []
+                    if critical:
+                        parts.append(f"🔴 {critical}")
+                    if warning:
+                        parts.append(f"🟡 {warning}")
+                    node_state["_anomaly_count"] = f" → 发现 {' '.join(parts)}"
 
-        # ── 组装当前显示 ──
-        display = ""
-        for sec_title, tokens in sections:
-            display += f"\n### {sec_title}\n"
-            display += "".join(tokens)
-        if display.strip():
-            yield display
+            node_state[name] = "done"
+            # respond 结束时跳过——流式阶段已在输出，最终 yield 会一起展示
+            if name != "respond":
+                yield _build_progress(node_state, tool_parts)
 
-    # 最终输出
-    if final_answer:
-        yield final_answer
-    elif sections:
-        display = ""
-        for sec_title, tokens in sections:
-            display += f"\n### {sec_title}\n"
-            display += "".join(tokens)
-        yield display
-    else:
-        yield "⚠️ 未生成回答，请重试。"
+    # 最终输出：进度 + 回答一起保留
+    answer = "".join(answer_tokens) if answer_tokens else ""
+    if answer:
+        yield _build_progress(node_state, tool_parts) + "\n\n---\n\n" + answer
 
 
 if __name__ == "__main__":

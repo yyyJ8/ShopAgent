@@ -45,6 +45,7 @@ simple_llm = ChatOpenAI(
     base_url=DEEPSEEK_BASE,
     api_key=_api_key,
     temperature=0.1,
+    streaming=True,
 )
 
 full_llm = ChatOpenAI(
@@ -52,6 +53,7 @@ full_llm = ChatOpenAI(
     base_url=DEEPSEEK_BASE,
     api_key=_api_key,
     temperature=0.3,
+    streaming=True,
 )
 
 # ① understand — 意图分类 + 实体提取
@@ -100,7 +102,14 @@ async def plan_node(state: AgentState, plan_llm) -> dict:
             messages.append(msg)
 
     response = await plan_llm.ainvoke(messages)
-    output = {"messages": [response]}
+
+    # 如果 LLM 没调工具（反问用户/澄清），直接当 final_answer，respond 透传
+    output: dict = {"messages": [response]}
+    if not response.tool_calls and response.content:
+        output["final_answer"] = response.content
+        logger = logging.getLogger("ozon-agent")
+        logger.debug("  plan: no tool_calls, passing through as final_answer")
+
     log_node_end("plan", output)
     return output
 
@@ -524,6 +533,11 @@ async def respond_node(state: AgentState) -> dict:
         messages.append(HumanMessage(content=state["user_query"]))
     else:
         messages.append(HumanMessage(content="请生成最终回答。"))
+
+    # plan 节点已直接设了 final_answer（如反问澄清），直接透传
+    if state.get("final_answer"):
+        log_node_end("respond", {"final_answer": state["final_answer"]})
+        return {}
 
     response = await simple_llm.ainvoke(messages)
     output = {"final_answer": response.content}
