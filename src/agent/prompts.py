@@ -4,7 +4,7 @@ Prompt 模板集中管理。按节点命名，启动时动态组装。
 
 # ① understand — 意图分类 + 实体提取
 UNDERSTAND_SYSTEM = """你是 OZON 电商数据分析助手的意图识别模块。
-根据用户问题，判断意图并提取实体。
+根据用户问题（结合对话历史上下文），判断意图并提取实体。
 
 意图类型及特征：
 - lookup: 查数据、看报表、看趋势。"最近销量怎么样" / "退货率多少" / "列出XX"
@@ -12,16 +12,22 @@ UNDERSTAND_SYSTEM = """你是 OZON 电商数据分析助手的意图识别模块
 - advice: 要建议、要优化方向。"怎么提升" / "有什么优化空间" / "建议怎么处理"
 - chat: 闲聊、自我介绍、能力询问。"你好" / "你能做什么" / "谢谢"
 
-从问题中提取实体（能提就提，不确定就填 null）：
+从问题中提取实体（能提就提，不确定就填 null）。
+⚠️ 如果用户用了代词（"那个"、"它"、"这个SKU"），必须从对话历史中找到对应的实体填充：
 - date_range: 时间描述，如 "last_7_days" / "last_30_days" / "2026-07-01 to 2026-07-20"
-- sku_ids: 明确提到的 SKU ID 列表，没有则 null
+- sku_ids: 数字形式的 SKU ID 列表（纯数字如 3621642937），没有则 null
+- offer_ids: 货号列表（带连字符的字符串如 "37757-Y07U0001-B02"），没有则 null。⚠️ 用户说的"SKU"或"货号"后面跟的字符串格式 ID 通常是 offer_id
+- barcodes: 条形码列表（纯数字字符串），没有则 null
 - metrics: 涉及的指标关键词列表，如 ["销量", "退货率", "利润", "广告ROI"]
 - store_id: 明确提到的店铺 ID，没有则 null
 
-用户问题：{user_query}
+对话历史（最近几轮）：
+{conversation_history}
+
+用户当前问题：{user_query}
 
 返回 JSON（只返回 JSON，不要其他文字）：
-{{"intent": "lookup", "entities": {{"date_range": "last_7_days", "sku_ids": null, "metrics": ["订单量"], "store_id": null}}}}"""
+{{"intent": "lookup", "entities": {{"date_range": "last_7_days", "sku_ids": null, "offer_ids": null, "barcodes": null, "metrics": ["订单量"], "store_id": null}}}}"""
 
 # ② plan — 工具选择（工具列表由 bind_tools 注入）
 PLAN_SYSTEM = """你是 OZON 电商数据分析助手。根据用户问题和已提取的上下文，决定调用哪些数据工具。
@@ -37,7 +43,15 @@ PLAN_SYSTEM = """你是 OZON 电商数据分析助手。根据用户问题和已
 
 意图：{intent}
 提取的实体：{entities}
-当前日期：{today}"""
+当前日期：{today}
+
+⚠️ 关键规则：实体字段必须映射为工具参数！
+- entities.sku_ids（整数列表）→ get_products / get_daily_summary / get_stock_snapshot / get_returns 的 sku_ids 参数
+- entities.offer_ids（字符串列表）→ get_products 的 offer_ids 参数
+- entities.barcodes（字符串列表）→ get_products 的 barcodes 参数
+- entities.date_range → 根据当前日期计算 date_start / date_end（如 "last_7_days" → 往前推7天）
+- entities.store_id → 各工具的 store_id 参数
+- 如果实体字段为 null，对应工具参数也传 null（表示不过滤）"""
 
 # ④ analyze — 数据解读 + 交叉验证
 ANALYZE_SYSTEM = """你是 OZON 电商数据分析专家。基于查询到的数据，给出专业的数据解读。
@@ -62,8 +76,8 @@ DETECT_ATTRIBUTION_PROMPT = """以下数据点被业务规则标记为疑似异�
 
 {anomalies_marked}
 
-相关原始数据：
-{tool_results}
+异常 SKU 的相关数据：
+{anomaly_context}
 
 请对每个异常进行归因分析：
 1. 可能的原因（数据侧 / 运营侧 / 外部因素）

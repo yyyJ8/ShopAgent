@@ -20,6 +20,8 @@ mcp = FastMCP(
 @mcp.tool()
 async def get_products(
     sku_ids: list[int] | None = None,
+    offer_ids: list[str] | None = None,
+    barcodes: list[str] | None = None,
     status: str | None = None,
     is_archived: bool | None = None,
     category_id: int | None = None,
@@ -28,7 +30,9 @@ async def get_products(
     """获取商品主数据。不传 store_id = 全平台商品。
 
     可选参数：
-    - sku_ids: SKU ID 列表，不传返回全部
+    - sku_ids: SKU ID 列表（数字），不传返回全部
+    - offer_ids: 货号列表（字符串，如 "37757-Y07U0001-B02"），不传返回全部
+    - barcodes: 条形码列表（字符串），不传返回全部
     - status: 商品状态（当前均为 "price_sent"）
     - is_archived: 是否已归档
     - category_id: 类目 ID
@@ -38,7 +42,8 @@ async def get_products(
     数据来源：products 表（原始数据，可靠度 ⭐⭐⭐）。
     """
     return await _tools.get_products(
-        sku_ids=sku_ids, status=status, is_archived=is_archived, category_id=category_id, store_id=store_id,
+        sku_ids=sku_ids, offer_ids=offer_ids, barcodes=barcodes,
+        status=status, is_archived=is_archived, category_id=category_id, store_id=store_id,
     )
 
 # ② get_postings — 订单/发货数据

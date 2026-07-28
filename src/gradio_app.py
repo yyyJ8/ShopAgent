@@ -6,9 +6,10 @@ Gradio 聊天界面 — Agent 展示层。
   终端 2: python -m src.gradio_app
 """
 import asyncio
+import uuid
 
 import gradio as gr
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import HumanMessage
 
 from src.agent.graph import build_graph
 from src.agent.config_loader import load_config
@@ -30,8 +31,7 @@ NODE_LABEL = {
 NODE_ORDER = ["understand", "plan", "call_tools", "data_check", "analyze", "detect", "suggest", "respond"]
 
 
-def _build_progress(node_state: dict, tool_parts: list[str]) -> str:
-    """根据节点状态拼进度树。"""
+def _build_progress(node_state: dict) -> str:
     lines = []
     for name in NODE_ORDER:
         status = node_state.get(name)
@@ -41,17 +41,12 @@ def _build_progress(node_state: dict, tool_parts: list[str]) -> str:
         if status == "active":
             lines.append(f"⏳ {label}...")
         elif status == "done":
-            if name == "call_tools" and tool_parts:
-                lines.append(f"✅ {label}")
-                for tp in tool_parts:
-                    lines.append(f"   {tp}")
-            else:
-                suffix = node_state.get("_anomaly_count", "") if name == "detect" else ""
-                lines.append(f"✅ {label}{suffix}")
+            lines.append(f"✅ {label}")
+
     return "\n".join(lines)
 
-
-async def respond(message: str, history: list):
+async def run_agent(message: str, thread_id: str):
+    """执行 Agent，yield 进度字符串。"""
     global graph
     if graph is None:
         async with _init_lock:
@@ -64,84 +59,77 @@ async def respond(message: str, history: list):
         "user_query": message,
         "messages": [HumanMessage(content=message)],
         "config": load_config(),
+        "final_answer": "",   # 清掉上一轮 checkpoint 残留的旧值
     }
-    config = {"configurable": {"thread_id": "gradio-session"}}
+    config = {"configurable": {"thread_id": thread_id}}
 
     node_state: dict[str, str] = {}
-    tool_parts: list[str] = []
-    answer_tokens: list[str] = []
 
     async for event in graph.astream_events(state, config, version="v2"):
         kind = event["event"]
         name = event["name"]
-
-        # ── 节点开始 → 立即推送 ⏳ ──
+        # ── 节点开始 ──
         if kind == "on_chain_start" and name in NODE_LABEL:
             node_state[name] = "active"
-            if name != "respond":
-                yield _build_progress(node_state, tool_parts)
-
-        # ── LLM 逐 token（只捕获 respond 节点）──
-        elif kind == "on_chat_model_stream" and node_state.get("respond") == "active":
-            chunk = event["data"]["chunk"]
-            if isinstance(chunk, AIMessageChunk) and chunk.content:
-                token = chunk.content
-                if isinstance(token, list):
-                    token = "".join(str(t) for t in token if isinstance(t, str))
-                if token:
-                    answer_tokens.append(token)
-                    progress = _build_progress(node_state, tool_parts)
-                    yield progress + "\n\n---\n\n" + "".join(answer_tokens)
-
+            yield _build_progress(node_state)
         # ── 节点结束 ──
-        elif kind == "on_chain_end" and name in NODE_LABEL:
-            if name == "call_tools":
-                output = event["data"].get("output", {})
-                results = output.get("tool_results", {})
-                tool_parts.clear()
-                for k, v in results.items():
-                    tool_name = k.split("#")[0]
-                    rows = v.get("row_count", 0)
-                    err = v.get("error")
-                    if err:
-                        tool_parts.append(f"❌ {tool_name}: {err}")
-                    else:
-                        tool_parts.append(f"✅ {tool_name}: {rows} 行")
-
-            elif name == "detect":
-                output = event["data"].get("output", {})
-                anomalies = output.get("anomalies", [])
-                if anomalies:
-                    critical = sum(1 for a in anomalies if a.get("severity") == "critical")
-                    warning = sum(1 for a in anomalies if a.get("severity") == "warning")
-                    parts = []
-                    if critical:
-                        parts.append(f"🔴 {critical}")
-                    if warning:
-                        parts.append(f"🟡 {warning}")
-                    node_state["_anomaly_count"] = f" → 发现 {' '.join(parts)}"
-
+        elif kind == "on_chain_end" and name in NODE_LABEL and name != "respond":
             node_state[name] = "done"
-            # respond 结束时跳过——流式阶段已在输出，最终 yield 会一起展示
-            if name != "respond":
-                yield _build_progress(node_state, tool_parts)
+            yield _build_progress(node_state)
+        elif kind == "on_chain_end" and name == "respond":
+            node_state[name] = "done"
+            output = event["data"].get("output", {})
+            final = output.get("final_answer", "")
+            yield _build_progress(node_state) + "\n\n---\n\n" + final
+            break
+    
+# ── Gradio UI ──
+async def on_message(message: str, history: list, thread_id: str):
+    """每次先追加用户消息，再逐次更新助手消息。同时清空输入框。"""
+    history.append({"role": "user", "content": message})
+    history.append({"role": "assistant", "content": ""})
+    yield history, thread_id, "" 
+    last = ""
+    async for display in run_agent(message, thread_id):
+        last = display
+        history[-1]["content"] = last
+        yield history, thread_id, ""
 
-    # 最终输出：进度 + 回答一起保留
-    answer = "".join(answer_tokens) if answer_tokens else ""
-    if answer:
-        yield _build_progress(node_state, tool_parts) + "\n\n---\n\n" + answer
+WELCOME = """👋 你好！我是你的 **OZON 店铺助手**。
 
+我可以帮你分析：
+• 📈 经营状况与趋势
+• ⚠️ 退货异常排查
+• 📦 库存预警
+• 📊 广告 ROI 分析
+
+💬 试试直接输入问题。"""
+
+with gr.Blocks(title="OZON 小帮手") as demo:
+    gr.Markdown("## OZON 小帮手")
+    gr.Markdown("基于真实 OZON 店铺后台数据")
+
+    session_id = gr.State(lambda: str(uuid.uuid4()))
+    chatbot = gr.Chatbot(
+        value=[{"role": "assistant", "content": WELCOME}],
+        height=580,
+    )
+
+    msg = gr.Textbox(
+        placeholder="询问店铺数据，例如：查看上周广告 ROI",
+        container=False,
+        lines=1,
+        max_lines=4,
+        autofocus=True,
+    )
+    send_btn = gr.Button("发送", variant="primary")
+
+    async def _on_submit(message, history, thread_id):
+        async for result in on_message(message, history, thread_id):
+            yield result
+
+    msg.submit(_on_submit, [msg, chatbot, session_id], [chatbot, session_id, msg])
+    send_btn.click(_on_submit, [msg, chatbot, session_id], [chatbot, session_id, msg])
 
 if __name__ == "__main__":
-    demo = gr.ChatInterface(
-        respond,
-        title="OZON 小帮手",
-        description="基于真实 OZON 店铺后台的数据",
-        examples=[
-            "最近7天整体经营状况怎么样？",
-            "有没有退货异常的SKU？",
-            "库存告急的SKU有哪些？",
-            "广告投放ROI怎么样？有浪费的吗？",
-        ],
-    )
     demo.launch(server_port=8501)

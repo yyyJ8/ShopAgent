@@ -33,18 +33,28 @@ def _check_sku_ids(sku_ids) -> str | None:
             return "sku_ids 必须是整数列表"
     return None
 
+def _check_str_list(name: str, values) -> str | None:
+    if values is not None:
+        if not isinstance(values, list) or not all(isinstance(x, str) for x in values):
+            return f"{name} 必须是字符串列表"
+    return None
+
 # ① get_products
 async def get_products(
     sku_ids: list[int] | None = None,
+    offer_ids: list[str] | None = None,
+    barcodes: list[str] | None = None,
     status: str | None = None,
     is_archived: bool | None = None,
     category_id: int | None = None,
     store_id: int | None = None,
 ) -> dict:
-    args = dict(sku_ids=sku_ids, status=status, is_archived=is_archived, category_id=category_id, store_id=store_id)
+    args = dict(sku_ids=sku_ids, offer_ids=offer_ids, barcodes=barcodes, status=status, is_archived=is_archived, category_id=category_id, store_id=store_id)
     if err := _check_sku_ids(sku_ids): return _format_error("get_products", args, err)
+    if err := _check_str_list("offer_ids", offer_ids): return _format_error("get_products", args, err)
+    if err := _check_str_list("barcodes", barcodes): return _format_error("get_products", args, err)
     try:
-        rows = await db.query_products(sku_ids=sku_ids, status=status, is_archived=is_archived, category_id=category_id, store_id=store_id)
+        rows = await db.query_products(sku_ids=sku_ids, offer_ids=offer_ids, barcodes=barcodes, status=status, is_archived=is_archived, category_id=category_id, store_id=store_id)
         return _format_result("get_products", args, rows)
     except Exception as e:
         return _format_error("get_products", args, str(e))

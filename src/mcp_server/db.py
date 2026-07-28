@@ -51,29 +51,33 @@ DEFAULT_LIMIT = 500
 
 # ① get_products
 _PRODUCTS_SQL = """
-    SELECT sku_id, product_id, name, offer_id, category_id,
+    SELECT sku_id, product_id, name, offer_id, barcode, category_id,
            price, old_price, min_price, commission_fbo_pct,
            volume_weight, status, is_archived,
            primary_image, images,
            created_at, updated_at, store_id
     FROM ozon.products
     WHERE ($1::bigint[] IS NULL OR sku_id = ANY($1))
-      AND ($2::varchar IS NULL OR status = $2)
-      AND ($3::boolean IS NULL OR is_archived = $3)
-      AND ($4::int IS NULL OR category_id = $4)
-      AND ($5::int IS NULL OR store_id = $5)
+      AND ($2::varchar[] IS NULL OR offer_id = ANY($2))
+      AND ($3::varchar[] IS NULL OR barcode = ANY($3))
+      AND ($4::varchar IS NULL OR status = $4)
+      AND ($5::boolean IS NULL OR is_archived = $5)
+      AND ($6::int IS NULL OR category_id = $6)
+      AND ($7::int IS NULL OR store_id = $7)
     ORDER BY sku_id
 """
 
 async def query_products(
     sku_ids: list[int] | None = None,
+    offer_ids: list[str] | None = None,
+    barcodes: list[str] | None = None,
     status: str | None = None,
     is_archived: bool | None = None,
     category_id: int | None = None,
     store_id: int | None = None,
 ) -> list[dict]:
     pool = await get_pool()
-    rows = await pool.fetch(_PRODUCTS_SQL, sku_ids, status, is_archived, category_id, store_id)
+    rows = await pool.fetch(_PRODUCTS_SQL, sku_ids, offer_ids, barcodes, status, is_archived, category_id, store_id)
     return [dict(r) for r in rows]
 
 # ② get_postings

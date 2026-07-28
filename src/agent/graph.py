@@ -16,8 +16,10 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from .data_summarizer import extract_anomaly_context, summarize_for_analysis
 from .mcp_client import get_client
 from .logger import log_node_end, log_node_start
+from .sqlite_saver import SqliteSaver
 from .prompts import (
     ANALYZE_SYSTEM,
     DETECT_ATTRIBUTION_PROMPT,
@@ -57,9 +59,30 @@ full_llm = ChatOpenAI(
 )
 
 # ① understand — 意图分类 + 实体提取
+def _recent_history(messages: list, max_turns: int = 5) -> str:
+    """提取最近 N 轮对话（只保留 Human + AI 文本，不包含 tool 消息）。"""
+    pairs: list[str] = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            pairs.append(f"用户：{msg.content}")
+        elif isinstance(msg, AIMessage) and msg.content:
+            # 跳过过长的内容（tool_results 摘要等）
+            content = msg.content
+            if len(content) > 500:
+                content = content[:200] + "..."
+            pairs.append(f"助手：{content}")
+    # 取最后 max_turns*2 条（每轮 = 用户 + 助手）
+    recent = pairs[-(max_turns * 2):]
+    return "\n".join(recent) if recent else "（无历史对话）"
+
+
 async def understand_node(state: AgentState) -> dict:
     log_node_start("understand", state)
-    system = UNDERSTAND_SYSTEM.format(user_query=state["user_query"])
+    history_text = _recent_history(state.get("messages", []))
+    system = UNDERSTAND_SYSTEM.format(
+        conversation_history=history_text,
+        user_query=state["user_query"],
+    )
     response = await simple_llm.ainvoke([
         SystemMessage(content=system),
         HumanMessage(content=state["user_query"]),
@@ -72,6 +95,13 @@ async def understand_node(state: AgentState) -> dict:
         }
     except json.JSONDecodeError:
         output = {"intent": "chat", "entities": {}, "error": "Intent parsing failed"}
+
+    # 每轮新对话重置数据完整性环的状态，避免跨轮次污染
+    output["plan_iteration"] = 0
+    output["tool_results"] = {}
+    output["missing_sources"] = []
+    output["skipped_rules"] = []
+
     log_node_end("understand", output)
     return output
 
@@ -97,7 +127,11 @@ async def plan_node(state: AgentState, plan_llm) -> dict:
         )
 
     messages = [SystemMessage(content=system)]
-    for msg in state.get("messages", []):
+    # 只保留最近 N 轮对话（每轮 = Human + AI），控制 token 消耗
+    history = state.get("messages", [])
+    MAX_HISTORY_TURNS = 5
+    keep = history[-(MAX_HISTORY_TURNS * 2):] if len(history) > MAX_HISTORY_TURNS * 2 else history
+    for msg in keep:
         if isinstance(msg, (HumanMessage, AIMessage)):
             messages.append(msg)
 
@@ -241,7 +275,9 @@ async def analyze_node(state: AgentState) -> dict:
 
     system = ANALYZE_SYSTEM.format(
         config_metrics=json.dumps(config_metrics, ensure_ascii=False),
-        tool_results=json.dumps(tool_results, ensure_ascii=False, default=str),
+        tool_results=json.dumps(
+            summarize_for_analysis(tool_results), ensure_ascii=False, default=str
+        ),
     )
     response = await full_llm.ainvoke([
         SystemMessage(content=system),
@@ -469,9 +505,10 @@ async def detect_node(state: AgentState) -> dict:
 
     # ── LLM 归因 ──
     if anomalies:
+        anomaly_context = extract_anomaly_context(tool_results, anomalies)
         prompt = DETECT_ATTRIBUTION_PROMPT.format(
             anomalies_marked=json.dumps(anomalies, ensure_ascii=False),
-            tool_results=json.dumps(tool_results, ensure_ascii=False, default=str),
+            anomaly_context=json.dumps(anomaly_context, ensure_ascii=False, default=str),
         )
         response = await full_llm.ainvoke([HumanMessage(content=prompt)])
         try:
@@ -537,7 +574,7 @@ async def respond_node(state: AgentState) -> dict:
     # plan 节点已直接设了 final_answer（如反问澄清），直接透传
     if state.get("final_answer"):
         log_node_end("respond", {"final_answer": state["final_answer"]})
-        return {}
+        return {"final_answer": state["final_answer"]}
 
     response = await simple_llm.ainvoke(messages)
     output = {"final_answer": response.content}
@@ -640,4 +677,4 @@ async def build_graph() -> StateGraph:
     builder.add_edge("suggest", "respond")
     builder.add_edge("respond", END)
 
-    return builder.compile(checkpointer=MemorySaver())
+    return builder.compile(checkpointer=SqliteSaver("data/checkpoints.db"))
