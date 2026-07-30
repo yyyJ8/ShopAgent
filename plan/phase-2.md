@@ -314,31 +314,31 @@ kill $MCP_PID
 
 ## 6. 开发顺序
 
-### 第 3 周：评测 + Gradio 骨架
+### 第 3 周：评测 + Gradio 骨架（✅ 已完成）
 
-- [ ] 评测集扩到 20 题，每道题写好 `expected_*` 字段
-- [ ] 跑评测 → 记录新 10 题得分 → 对比 Phase 1 的 92%
-- [ ] 针对 #4, #9 等已知问题调 prompt 或 tool description
-- [ ] `pip install gradio`
-- [ ] `src/gradio_app.py`：ChatInterface + 快捷示例
+- [x] 评测集扩到 20 题，每道题写好 `expected_*` 字段
+- [x] 跑评测 → 96%（23.5/24.5）
+- [x] 针对 #4, #9 等已知问题调 prompt 或 tool description
+- [x] `pip install gradio`
+- [x] `src/gradio_app.py`：gr.Blocks + 进度树 + 流式输出
 
 ### 第 4 周：完善 + 交付
 
-- [ ] 针对 get_daily_summary 极端值问题优化 prompt 提醒
-- [ ] 多轮对话：SqliteSaver 持久化 + 追问代词解析
-- [ ] README.md 完整文档
-- [ ] 启动脚本 start.sh
-- [ ] 全程用 Gradio 录一段演示（面试用）
+- [x] 针对 get_daily_summary 极端值问题优化 prompt 提醒
+- [x] 多轮对话：SqliteSaver 持久化 + 追问代词解析
+- [x] README.md 完整文档
+- [x] 启动脚本 start.sh
+- [x] 全程用 Gradio 录一段演示（面试用）
 
 ---
 
 ## 7. Phase 2 验收标准
 
-- [ ] 20 题评测跑通，总体评分 ≥ 90%
-- [ ] Gradio 界面可演示：多轮对话 + Markdown 渲染 + 快捷问题
-- [ ] README 完整，第三方能照着跑起来
-- [ ] `start.sh` 一键启动
-- [ ] 多轮对话：追问代词正确解析，上下文不丢
+- [x] 20 题评测跑通，总体评分 96%
+- [x] Gradio 界面可演示：多轮对话 + Markdown 渲染 + 进度树
+- [x] README 完整，第三方能照着跑起来
+- [x] `start.sh` 一键启动
+- [x] 多轮对话：追问代词正确解析，上下文不丢
 
 Phase 2 完成的标志：**打开 Gradio 页面 → 点快捷"检查异常" → 看到异常列表 + 归因分析 + 建议 → 追问"那个 SKU 的广告怎么优化？" → Agent 正确继承上下文并给出回答。**
 

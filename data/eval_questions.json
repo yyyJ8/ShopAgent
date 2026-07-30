@@ -1,0 +1,224 @@
+[
+  {
+    "id": 1,
+    "label": "chat 闲谈",
+    "intent": "chat",
+    "query": "你好，你能做什么？",
+    "expected_intent": "chat",
+    "expected_tools": [],
+    "expect_anomalies": false,
+    "expect_suggestions": false
+  },
+  {
+    "id": 2,
+    "label": "lookup 单工具",
+    "intent": "lookup",
+    "query": "最近7天店铺1的订单量有多少？",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_postings"],
+    "expect_anomalies": false,
+    "expect_suggestions": false
+  },
+  {
+    "id": 3,
+    "label": "lookup 店铺对比",
+    "intent": "lookup",
+    "query": "店铺1和店铺2的利润率对比？",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_daily_summary"],
+    "expect_anomalies": false,
+    "expect_suggestions": false
+  },
+  {
+    "id": 4,
+    "label": "lookup 多工具",
+    "intent": "lookup",
+    "query": "最近30天退货率最高的SKU有哪些？帮我排个序。",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_returns", "get_daily_summary"],
+    "expect_anomalies": false,
+    "expect_suggestions": false
+  },
+  {
+    "id": 5,
+    "label": "anomaly 退货",
+    "intent": "anomaly",
+    "query": "有没有退货异常的SKU？帮我检查一下。",
+    "expected_intent": "anomaly",
+    "expected_tools": ["get_returns", "get_daily_summary"],
+    "expect_anomalies": true,
+    "expect_suggestions": true
+  },
+  {
+    "id": 6,
+    "label": "anomaly 库存",
+    "intent": "anomaly",
+    "query": "库存有没有问题？哪些SKU库存不足了？",
+    "expected_intent": "anomaly",
+    "expected_tools": ["get_stock_snapshot"],
+    "expect_anomalies": true,
+    "expect_suggestions": true
+  },
+  {
+    "id": 7,
+    "label": "anomaly 广告",
+    "intent": "anomaly",
+    "query": "广告投放有没有异常的SKU？广告费有没有浪费的？",
+    "expected_intent": "anomaly",
+    "expected_tools": ["get_ad_performance"],
+    "expect_anomalies": true,
+    "expect_suggestions": true
+  },
+  {
+    "id": 8,
+    "label": "anomaly 全扫描",
+    "intent": "anomaly",
+    "query": "最近30天有没有什么异常？全面扫描一下。",
+    "expected_intent": "anomaly",
+    "expected_tools": [],
+    "expect_anomalies": true,
+    "expect_suggestions": true,
+    "note": "全扫描场景，不校验具体工具（数据完整性环自动补全），只校验异常命中 ≥ 3 条规则"
+  },
+  {
+    "id": 9,
+    "label": "advice 运营建议",
+    "intent": "advice",
+    "query": "针对退货问题有什么优化建议？",
+    "expected_intent": "advice",
+    "expected_tools": ["get_returns", "get_daily_summary"],
+    "expect_anomalies": false,
+    "expect_suggestions": true
+  },
+  {
+    "id": 10,
+    "label": "lookup 商品查询",
+    "intent": "lookup",
+    "query": "所有未归档的商品有哪些？列出商品名称。",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_products"],
+    "expect_anomalies": false,
+    "expect_suggestions": false
+  },
+  {
+    "id": 11,
+    "label": "lookup 货号查询",
+    "intent": "lookup",
+    "query": "货号 37757-Y07U0001-B02 对应哪个 SKU？商品名称是什么？",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_products"],
+    "expect_anomalies": false,
+    "expect_suggestions": false,
+    "note": "考察 offer_ids 实体提取 + get_products 的 offer_ids 参数"
+  },
+  {
+    "id": 12,
+    "label": "lookup 店铺利润对比",
+    "intent": "lookup",
+    "query": "店铺1和店铺2这个月哪个净利润更高？高多少？",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_finance_transactions"],
+    "expect_anomalies": false,
+    "expect_suggestions": false,
+    "note": "考察 store_id 参数 + 店铺对比，可能需要两次调用"
+  },
+  {
+    "id": 13,
+    "label": "anomaly 退货广告复合",
+    "intent": "anomaly",
+    "query": "有没有退货率很高但还在大量投广告的SKU？帮我找出来。",
+    "expected_intent": "anomaly",
+    "expected_tools": ["get_returns", "get_ad_performance", "get_daily_summary"],
+    "expect_anomalies": true,
+    "expect_suggestions": true,
+    "note": "跨数据源关联：returns + ad_performance + daily_summary 三者联动"
+  },
+  {
+    "id": 14,
+    "label": "lookup 广告排行",
+    "intent": "lookup",
+    "query": "广告花费最高的5个SKU它们各自的转化率是多少？",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_ad_performance"],
+    "expect_anomalies": false,
+    "expect_suggestions": false,
+    "note": "排序 + 多指标输出（spend + ctr + sold_units）"
+  },
+  {
+    "id": 15,
+    "label": "anomaly 库存订单关联",
+    "intent": "anomaly",
+    "query": "当前库存少于5件的SKU最近一周有没有产生过订单？",
+    "expected_intent": "anomaly",
+    "expected_tools": ["get_stock_snapshot", "get_postings"],
+    "expect_anomalies": true,
+    "expect_suggestions": true,
+    "note": "跨 stock + postings 关联查询"
+  },
+  {
+    "id": 16,
+    "label": "anomaly 财务异常",
+    "intent": "anomaly",
+    "query": "看看最近的财务流水，有没有金额特别大的退款记录？",
+    "expected_intent": "anomaly",
+    "expected_tools": ["get_finance_transactions"],
+    "expect_anomalies": true,
+    "expect_suggestions": false,
+    "note": "finance 工具异常检测，建议非必须（无规则直接命中退款异常）"
+  },
+  {
+    "id": 17,
+    "label": "advice 广告优化",
+    "intent": "advice",
+    "query": "最近广告花了不少钱但出单很少，帮我分析下原因并给优化建议。",
+    "expected_intent": "advice",
+    "expected_tools": ["get_ad_performance", "get_daily_summary"],
+    "expect_anomalies": false,
+    "expect_suggestions": true,
+    "note": "建议可执行性：需要具体到 SKU/广告活动的操作建议"
+  },
+  {
+    "id": 18,
+    "label": "lookup 趋势对比",
+    "intent": "lookup",
+    "query": "这个月和上个月相比，退货率是上升了还是下降了？变化了多少？",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_returns", "get_daily_summary"],
+    "expect_anomalies": false,
+    "expect_suggestions": false,
+    "note": "时间对比 + 趋势分析，需要两个时间窗口的数据"
+  },
+  {
+    "id": 19,
+    "label": "anomaly 经营概览",
+    "intent": "anomaly",
+    "query": "帮我看看最近30天的整体经营状况，有没有什么值得关注的？",
+    "expected_intent": "anomaly",
+    "expected_tools": [],
+    "expect_anomalies": true,
+    "expect_suggestions": true,
+    "note": "全扫描综合诊断，工具由数据完整性环自动补全，只校验异常命中 + 建议非空"
+  },
+  {
+    "id": 20,
+    "label": "lookup 利润排序",
+    "intent": "lookup",
+    "query": "所有SKU按毛利润从低到高排序，利润率最低的5个是哪些？",
+    "expected_intent": "lookup",
+    "expected_tools": ["get_daily_summary"],
+    "expect_anomalies": false,
+    "expect_suggestions": false,
+    "note": "排序 + Bottom N + 利润率计算"
+  },
+  {
+    "id": 21,
+    "label": "clarify 模糊反问",
+    "intent": "clarify",
+    "query": "帮我查一下",
+    "expected_intent": "clarify",
+    "expected_tools": [],
+    "expect_anomalies": false,
+    "expect_suggestions": false,
+    "note": "问题太模糊无具体对象，应反问用户补充信息"
+  }
+]

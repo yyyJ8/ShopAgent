@@ -13,7 +13,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .data_summarizer import extract_anomaly_context, summarize_for_analysis
@@ -566,7 +565,7 @@ async def respond_node(state: AgentState) -> dict:
     )
 
     messages = [SystemMessage(content=system)]
-    if state.get("intent") == "chat":
+    if state.get("intent") in ("chat", "clarify"):
         messages.append(HumanMessage(content=state["user_query"]))
     else:
         messages.append(HumanMessage(content="请生成最终回答。"))
@@ -583,7 +582,7 @@ async def respond_node(state: AgentState) -> dict:
 
 # 路由函数
 def route_after_understand(state: AgentState) -> str:
-    if state.get("intent") == "chat":
+    if state.get("intent") in ("chat", "clarify"):
         return "respond"
     return "plan"
 
